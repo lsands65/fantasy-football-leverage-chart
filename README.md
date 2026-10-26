@@ -1,24 +1,35 @@
 # Fantasy Football Leverage Chart
 
-Playoff odds for every team in a Sleeper league: now, with a win this week, and with a loss this week.
+Playoff odds for every team in a Sleeper or ESPN league: now, with a win this week, and with a loss this week.
 Styled after the NFL playoff leverage charts by mrcaseb.
 
 Everything runs in the browser. There's no server and no build step.
 
 ## Use it
 
-1. Open the page and enter a Sleeper username.
-2. Pick a league.
+1. Open the page and enter a Sleeper username, or paste an ESPN league link (or its `leagueId` number).
+2. Pick a league. ESPN leagues stay in the list until you remove them with ×.
 3. Optional: open **Playoff rules** to match your league's format, then **Apply rules**.
 4. Use **Copy chart as PNG** to paste the chart into a group chat, or **Copy share link** to send the page.
 
 The share link includes the username, league and playoff rules, so everyone who opens it sees the same chart.
 The last username, league and rules are also remembered in your browser (`localStorage`).
 
+## ESPN leagues
+
+- **Public leagues** load for anyone.
+- **Private leagues** load only for someone signed in to ESPN in the same browser, and only if that
+  browser lets other sites use ESPN's sign-in (many block it). ESPN accepts sign-in only as cookies,
+  and a web page can't attach another site's cookies, so there's no way to paste a token into the page.
+  The dependable option is for the league manager to turn on **Make league viewable to public**
+  in ESPN's league settings.
+- Projections: ESPN's weekly projection for the current week, then each player's season projection
+  per game for later weeks. Both come from ESPN already scored for the league.
+
 ## How the odds work
 
 - Each team's expected score each remaining week is the best lineup its current roster can field,
-  using Sleeper's player projections scored with the league's own settings.
+  using the platform's player projections scored with the league's own settings.
   Players on bye or ruled out are left out.
 - Week-to-week spread comes from how much each team's scores have varied this season.
 - 50,000 simulated seasons. Leagues with a median game count it every week.
@@ -28,7 +39,7 @@ The last username, league and rules are also remembered in your browser (`localS
   clinched its division, or been eliminated, based on records alone.
   These letters never show early, but they can show up a week later than the earliest possible moment.
 
-If Sleeper's projections can't be loaded, it falls back to each team's scoring average so far.
+If projections can't be loaded, it falls back to each team's scoring average so far.
 
 ## Publish with GitHub Pages
 
