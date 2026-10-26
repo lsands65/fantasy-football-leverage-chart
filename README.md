@@ -24,8 +24,9 @@ The last username, league and rules are also remembered in your browser (`localS
   chart as a PNG. Repeat the steps to refresh the numbers.
   (A pasted token can't work from a static site: ESPN accepts sign-in only as cookies, and a web page
   can't attach another site's cookies.)
-- Projections: ESPN's weekly projection for the current week, then each player's season projection
-  per game for later weeks. Both come from ESPN already scored for the league.
+- Projections: Sleeper's weekly projections for every remaining week, matched to ESPN players by
+  name, position and NFL team and scored with the ESPN league's scoring settings. Defenses use Sleeper's
+  standard defense points. Any player who can't be matched falls back to ESPN's projection.
 
 ## How the odds work
 

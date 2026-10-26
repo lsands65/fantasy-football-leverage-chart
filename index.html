@@ -209,6 +209,15 @@ const PROJ = "https://api.sleeper.com/projections/nfl";
 const ESPN = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl";
 const ESPN_SLOTS = { 0: "QB", 2: "RB", 3: "WRRB_FLEX", 4: "WR", 5: "REC_FLEX", 6: "TE", 7: "SUPER_FLEX", 16: "DEF", 17: "K", 23: "FLEX" };
 const ESPN_POS = { 1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "DEF" };
+// ESPN scoring items -> Sleeper projection stats, so Sleeper's projections can be scored with an ESPN league's rules
+const ESPN_STATS = { 3: ["pass_yd"], 4: ["pass_td"], 19: ["pass_2pt"], 20: ["pass_int"], 24: ["rush_yd"], 25: ["rush_td"], 26: ["rush_2pt"],
+  42: ["rec_yd"], 43: ["rec_td"], 44: ["rec_2pt"], 53: ["rec"], 68: ["fum"], 72: ["fum_lost"],
+  74: ["fgm_50p"], 77: ["fgm_40_49"], 80: ["fgm_0_19", "fgm_20_29", "fgm_30_39"], 85: ["fgmiss"], 86: ["xpm"], 88: ["xpmiss"], 198: ["fgm_50_59"], 201: ["fgm_60p"] };
+const ESPN_TEAM = { WSH: "WAS" };  // where ESPN's team abbreviation differs from Sleeper's
+function playerKey(name, pos, team) {
+  const n = name.toLowerCase().replace(/[’']/g, "").replace(/[.\-]/g, " ").replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "").split(/\s+/).filter(Boolean).join(" ");
+  return team === undefined ? `${n}|${pos}` : `${n}|${pos}|${team}`;
+}
 const N_SIMS = 50000;
 const SHRINK_WEEKS = 3;   // history fallback: pull each team's average toward the league average
 const NS = "http://www.w3.org/2000/svg";
@@ -364,7 +373,7 @@ async function loadSleeper(entry, onStep) {
   const r0 = rosters[0].settings, games = r0.wins + r0.losses + (r0.ties || 0);
   const done = median ? Math.floor(games / 2) : games;   // completed weeks
   const levWeek = done + 1;
-  const d = { provider: "Sleeper", name: lg.name, season, T, median, poStart, done, levWeek, playoffTeams: s.playoff_teams || 6 };
+  const d = { provider: "Sleeper", projSource: "Sleeper", name: lg.name, season, T, median, poStart, done, levWeek, playoffTeams: s.playoff_teams || 6 };
   if (levWeek >= poStart) return d;
 
   onStep("Loading schedule…");
@@ -429,12 +438,12 @@ async function espnLeague(id, season) {
   if (!r.ok) throw new Error(`ESPN returned ${r.status} for league ${id}.`);
   return r.json();
 }
-let byeWeeks = null;
-function espnByes(season) {
-  if (!byeWeeks) byeWeeks = getJSON(`${ESPN}/seasons/${season}?view=proTeamSchedules_wl`)
-    .then(x => new Map(x.settings.proTeams.map(t => [t.id, t.byeWeek])))
+let proTeams = null;  // ESPN pro team id -> { bye, abbrev } (abbrev in Sleeper's spelling)
+function espnProTeams(season) {
+  if (!proTeams) proTeams = getJSON(`${ESPN}/seasons/${season}?view=proTeamSchedules_wl`)
+    .then(x => new Map(x.settings.proTeams.map(t => [t.id, { bye: t.byeWeek, abbrev: ESPN_TEAM[t.abbrev] || t.abbrev }])))
     .catch(() => new Map());
-  return byeWeeks;
+  return proTeams;
 }
 async function loadESPN(entry, onStep) {
   const season = entry.season;
@@ -465,26 +474,62 @@ async function loadESPN(entry, onStep) {
   d.pairs = future.map(w => sched.filter(m => m.matchupPeriodId === w && m.away).map(m => [idx.get(m.home.teamId), idx.get(m.away.teamId)]));
 
   onStep("Loading projections…");
-  const byes = await espnByes(season);
+  const teamsInfo = await espnProTeams(season);
   const slots = [];
   for (const [id, n] of Object.entries(raw.settings.rosterSettings.lineupSlotCounts)) if (ESPN_SLOTS[id]) for (let k = 0; k < n; k++) slots.push(ESPN_SLOTS[id]);
-  // this week: ESPN's weekly projection; later weeks: season projection per game. Both already in league scoring.
-  const pool = (t, w) => {
+
+  // Sleeper's weekly projections, matched to ESPN players by name, position and NFL team,
+  // and scored with this league's ESPN scoring. Defenses use Sleeper's standard defense points.
+  let sleeperWeeks = null;
+  try { sleeperWeeks = await Promise.all(future.map(w => projections(season, w))); } catch (e) { sleeperWeeks = null; }
+  const scoring = {};
+  for (const it of raw.settings.scoringSettings.scoringItems || []) for (const k of ESPN_STATS[it.statId] || []) scoring[k] = it.points;
+  const byKey = new Map();  // name|pos|team and name|pos -> Sleeper player id (name|pos only when unambiguous)
+  for (const wk of sleeperWeeks || []) for (const [id, x] of wk) {
+    const pl = x.player || {};
+    if (pl.position === "DEF") { byKey.set(`def|${id}`, id); continue; }
+    const name = `${pl.first_name || ""} ${pl.last_name || ""}`;
+    byKey.set(playerKey(name, pl.position, x.team), id);
+    const loose = playerKey(name, pl.position), seen = byKey.get(loose);
+    byKey.set(loose, seen && seen !== id ? null : id);
+  }
+  const sleeperId = (p, pos) => {
+    const team = (teamsInfo.get(p.proTeamId) || {}).abbrev;
+    if (pos === "DEF") return byKey.get(`def|${team}`) || null;
+    return byKey.get(playerKey(p.fullName, pos, team)) || byKey.get(playerKey(p.fullName, pos)) || null;
+  };
+  let matched = 0, total = 0;
+  const pool = (t, w, wi) => {
     const out = [];
     for (const e of (t.roster && t.roster.entries) || []) {
       const p = e.playerPoolEntry && e.playerPoolEntry.player, pos = p && ESPN_POS[p.defaultPositionId];
-      if (!pos || byes.get(p.proTeamId) === w) continue;
-      const inj = p.injuryStatus, ir = e.lineupSlotId === 21 || inj === "INJURY_RESERVE";
-      if ((w === levWeek && (ir || ["OUT", "DOUBTFUL", "SUSPENSION"].includes(inj))) || (w < levWeek + 3 && ir)) continue;
-      const st = p.stats || [];
-      const wk = st.find(x => x.seasonId === season && x.scoringPeriodId === w && x.statSourceId === 1 && x.statSplitTypeId === 1);
-      const yr = st.find(x => x.seasonId === season && x.scoringPeriodId === 0 && x.statSourceId === 1 && x.statSplitTypeId === 0);
-      const pts = wk ? wk.appliedTotal : yr ? yr.appliedTotal / 17 : 0;
+      if (!pos) continue;
+      const sid = sleeperWeeks && sleeperId(p, pos);
+      if (wi === 0) { total++; matched += !!sid; }
+      const ir = e.lineupSlotId === 21 || p.injuryStatus === "INJURY_RESERVE";
+      let pts;
+      if (sid) {
+        const x = sleeperWeeks[wi].get(sid);
+        if (!x || !x.stats) continue;  // bye week or no projection
+        const inj = x.player && x.player.injury_status;
+        if ((w === levWeek && (ir || OUT_NOW.has(inj) || OUT_LONG.has(inj))) || (w < levWeek + 3 && (ir || OUT_LONG.has(inj)))) continue;
+        pts = pos === "DEF" ? (x.stats.pts_std || 0) : fantasyPoints(x.stats, scoring);
+      } else {
+        // no Sleeper match: ESPN's own projection (this week's, else season projection per game)
+        if ((teamsInfo.get(p.proTeamId) || {}).bye === w) continue;
+        if ((w === levWeek && (ir || ["OUT", "DOUBTFUL", "SUSPENSION"].includes(p.injuryStatus))) || (w < levWeek + 3 && ir)) continue;
+        const st = p.stats || [];
+        const wk = st.find(x => x.seasonId === season && x.scoringPeriodId === w && x.statSourceId === 1 && x.statSplitTypeId === 1);
+        const yr = st.find(x => x.seasonId === season && x.scoringPeriodId === 0 && x.statSourceId === 1 && x.statSplitTypeId === 0);
+        pts = wk ? wk.appliedTotal : yr ? yr.appliedTotal / 17 : 0;
+      }
       if (pts) out.push([pts, pos]);
     }
     return out;
   };
-  let mu = future.map(w => raw.teams.map(t => bestLineup(pool(t, w), slots)));
+  let mu = future.map((w, wi) => raw.teams.map(t => bestLineup(pool(t, w, wi), slots)));
+  d.projSource = sleeperWeeks && matched ? "Sleeper" : "ESPN";
+  d.matched = [matched, total];
   if (!mu.flat().some(v => v > 0)) mu = null;  // roster data hidden: fall back to scoring history
 
   const members = new Map((raw.members || []).map(m => [m.id, m]));
@@ -885,7 +930,7 @@ async function run_(run) {
   const nDiv = divisionsOf(d).length;
   S.view = { name: d.name || entry.name, season: d.season, week: d.levWeek, rows, teams: d.T, provider: d.provider,
     spots: (nDiv > 1 ? S.rules.div * nDiv : 0) + S.rules.rec + S.rules.pts,
-    hasDiv: nDiv > 1 && S.rules.div > 0, canEliminate: !S.rules.pts, model: d.model, median: d.median };
+    hasDiv: nDiv > 1 && S.rules.div > 0, canEliminate: !S.rules.pts, model: d.model, median: d.median, projSource: d.projSource, matched: d.matched };
   draw();
 }
 
@@ -936,8 +981,10 @@ function draw() {
   });
 
   const model = v.model === "projections"
-    ? `Each team's expected score every week is the best lineup its current roster can field, using ${v.provider}'s player projections in this league's scoring` +
-      (v.provider === "ESPN" ? " (this week's projection, then each player's season projection per game). " : ". ") + "Players on bye or ruled out are left out. "
+    ? `Each team's expected score every week is the best lineup its current roster can field, using ${v.projSource}'s weekly player projections in this league's scoring. ` +
+      (v.provider === "ESPN" && v.projSource === "Sleeper" ? `Players are matched from ESPN to Sleeper by name, position and team (${v.matched[0]} of ${v.matched[1]} rostered players); defenses use Sleeper's standard defense points, and anyone unmatched uses ESPN's projection. ` : "") +
+      (v.projSource === "ESPN" ? "ESPN only projects the current week, so later weeks use each player's season projection per game. " : "") +
+      "Players on bye or ruled out are left out. "
     : `${v.provider} projections weren't available, so each team's weekly score is drawn from its scoring average so far, pulled toward the league average. `;
   $("foot").innerHTML = `<p>${model}${v.median ? "Every week also counts a win or loss against the league median. " : ""}` +
     `Playoff spots: <span data-rules></span>. Records tie-break on points for. ` +
