@@ -1,0 +1,857 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sleeper Playoff Leverage</title>
+<style id="fontfaces">
+@font-face { font-family: "Roboto Condensed"; font-weight: 400; font-display: swap; src: url(fonts/roboto-condensed-400.woff2) format("woff2"); }
+@font-face { font-family: "Roboto Condensed"; font-weight: 700; font-display: swap; src: url(fonts/roboto-condensed-700.woff2) format("woff2"); }
+@font-face { font-family: "Rubik"; font-weight: 800; font-display: swap; src: url(fonts/rubik-800.woff2) format("woff2"); }
+</style>
+<style>
+/* Layout: one textured sheet; title top-left, a staircase of leverage bars, legend tucked into the empty lower-right. */
+:root {
+  --paper: #f3efe8;
+  --ink: #3a3a3a;
+  --ink-soft: #77726a;
+  --loss: #e3740f;
+  --win: #1679bd;
+  --edge: rgba(40, 32, 20, .22);
+  --chip: #ffffff;
+  --grain: .55;
+  --display: "Rubik", "Arial Black", system-ui, sans-serif;
+  --label: "Roboto Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #1d1c1a; --ink: #ece7de; --ink-soft: #a29b90; --loss: #f59a45; --win: #5db3ee;
+    --edge: rgba(255, 248, 235, .35); --chip: #2a2926; --grain: .18;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #1d1c1a; --ink: #ece7de; --ink-soft: #a29b90; --loss: #f59a45; --win: #5db3ee;
+  --edge: rgba(255, 248, 235, .35); --chip: #2a2926; --grain: .18;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.4 var(--label); }
+body::after {
+  content: ""; position: fixed; inset: 0; pointer-events: none; opacity: var(--grain); mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .45 0 0 0 0 .4 0 0 0 0 .33 0 0 0 .22 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) body::after { mix-blend-mode: screen; } }
+:root[data-theme="dark"] body::after { mix-blend-mode: screen; }
+
+.sheet { max-width: 1040px; margin: 0 auto; padding-block: 28px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 18px; }
+header { display: grid; gap: 6px; }
+h1 { font-family: var(--display); font-weight: 800; font-size: clamp(2rem, 6vw, 3.4rem); line-height: 1; margin: 0; letter-spacing: -.01em; text-wrap: balance; }
+.sub { font-size: clamp(1.15rem, 2.6vw, 1.7rem); margin: 0; color: var(--ink); min-height: 1.4em; }
+.sub b { font-weight: 700; }
+
+.who { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.who label { color: var(--ink-soft); }
+input[type="text"], input[type="number"] {
+  font: 400 1rem/1 var(--label); color: var(--ink); background: var(--chip);
+  border: 1.5px solid var(--edge); border-radius: 6px; padding: 8px 10px;
+}
+input[type="text"] { width: 14em; max-width: 100%; }
+input[type="number"] { width: 4.2em; }
+input:focus-visible, button:focus-visible, summary:focus-visible, .row:focus-visible { outline: 2px solid var(--win); outline-offset: 2px; }
+
+.leagues { display: flex; flex-wrap: wrap; gap: 8px; }
+.leagues button {
+  font: 400 .95rem/1 var(--label); color: var(--ink); background: transparent; cursor: pointer;
+  border: 1.5px solid var(--edge); border-radius: 999px; padding: 9px 14px; display: inline-flex; gap: 8px; align-items: baseline;
+}
+.leagues button small { color: var(--ink-soft); font-size: .8rem; }
+.leagues button[aria-pressed="true"] { font-weight: 700; background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.leagues button[aria-pressed="true"] small { color: var(--paper); opacity: .7; }
+
+.btn {
+  font: 700 .95rem/1 var(--label); cursor: pointer; border-radius: 6px; padding: 9px 14px;
+  background: var(--win); color: var(--paper); border: 1.5px solid var(--win);
+}
+.btn.ghost { background: transparent; color: var(--win); }
+.btn:disabled { opacity: .5; cursor: default; }
+.tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.status { color: var(--ink-soft); font-size: .92rem; }
+
+details.rules { border: 1.5px solid var(--edge); border-radius: 8px; padding: 10px 14px; }
+details.rules summary { cursor: pointer; font-weight: 700; }
+details.rules summary span { font-weight: 400; color: var(--ink-soft); }
+.rule-grid { display: grid; gap: 10px; margin-top: 12px; }
+.rule { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.rule label { min-width: 0; }
+.rule .hint { color: var(--ink-soft); font-size: .88rem; }
+.rule-total { font-variant-numeric: tabular-nums; }
+.rule-total.off { color: var(--loss); font-weight: 700; }
+
+.preview { display: grid; gap: 8px; justify-items: start; }
+.preview img { width: 100%; max-width: 760px; border: 1px solid var(--edge); border-radius: 4px; }
+.preview p { margin: 0; color: var(--ink-soft); font-size: .92rem; }
+
+.you { font-size: 1.05rem; line-height: 1.45; max-width: 68ch; margin: 0; }
+.plot { overflow-x: auto; position: relative; min-height: 120px; }
+.plot svg { display: block; width: 100%; min-width: 680px; height: auto; font-family: var(--label); font-variant-numeric: tabular-nums; }
+.plot .empty { color: var(--ink-soft); padding: 40px 0; margin: 0; }
+.row { cursor: default; outline: none; }
+.row:hover .ring, .row:focus .ring { stroke: var(--ink); }
+
+.tip {
+  position: fixed; z-index: 20; pointer-events: none; background: var(--chip); color: var(--ink); border: 1px solid var(--edge);
+  border-radius: 8px; padding: 10px 12px; font-size: .9rem; line-height: 1.4; box-shadow: 0 6px 18px rgba(0,0,0,.14); min-width: 190px;
+}
+.tip strong { font-size: 1rem; }
+.tip .k { color: var(--ink-soft); }
+.tip .grid { display: grid; grid-template-columns: auto auto; gap: 0 14px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+footer { color: var(--ink-soft); font-size: .9rem; line-height: 1.5; max-width: 75ch; display: grid; gap: 6px; }
+footer p { margin: 0; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <h1>Fantasy Playoff Leverage</h1>
+    <p class="sub" id="sub"></p>
+  </header>
+
+  <form class="who" id="who">
+    <label for="username">Sleeper username</label>
+    <input type="text" id="username" autocomplete="username" spellcheck="false" required>
+    <button class="btn" type="submit">Load leagues</button>
+    <span class="status" id="load-status" aria-live="polite"></span>
+  </form>
+
+  <div class="leagues" id="leagues" role="group" aria-label="League"></div>
+
+  <details class="rules" id="rules" hidden>
+    <summary>Playoff rules <span id="rules-summary"></span></summary>
+    <div class="rule-grid">
+      <div class="rule">
+        <input type="number" id="r-div" min="0" step="1">
+        <label for="r-div">spots for the top teams in each division</label>
+        <span class="hint" id="r-div-hint"></span>
+      </div>
+      <div class="rule">
+        <input type="number" id="r-rec" min="0" step="1">
+        <label for="r-rec">then spots for the best remaining records (ties go to points for)</label>
+      </div>
+      <div class="rule">
+        <input type="number" id="r-pts" min="0" step="1">
+        <label for="r-pts">then spots for the most remaining points for</label>
+      </div>
+      <div class="rule">
+        <span class="rule-total" id="r-total"></span>
+      </div>
+      <div class="tools">
+        <button class="btn" type="button" id="r-apply">Apply rules</button>
+        <button class="btn ghost" type="button" id="r-reset">Use Sleeper's settings</button>
+      </div>
+    </div>
+  </details>
+
+  <p class="you" id="you"></p>
+  <div class="tools" id="tools" hidden>
+    <button class="btn" type="button" id="copy-png">Copy chart as PNG</button>
+    <button class="btn ghost" type="button" id="show-png">Show as image</button>
+    <button class="btn ghost" type="button" id="copy-link">Copy share link</button>
+    <span class="status" id="status" aria-live="polite"></span>
+  </div>
+  <div class="preview" id="preview" hidden>
+    <p>Right-click the image (or press and hold on a phone) to copy or save it.</p>
+    <img id="preview-img" alt="Playoff leverage chart as an image">
+  </div>
+  <div class="plot" id="plot"><p class="empty">Enter a Sleeper username to see playoff odds for each of its leagues.</p></div>
+  <div class="tip" id="tip" hidden></div>
+  <footer id="foot"></footer>
+</div>
+
+<script>
+"use strict";
+const API = "https://api.sleeper.app/v1";
+const PROJ = "https://api.sleeper.com/projections/nfl";
+const N_SIMS = 50000;
+const SHRINK_WEEKS = 3;   // history fallback: pull each team's average toward the league average
+const NS = "http://www.w3.org/2000/svg";
+const FALLBACK = ["#2b4c7e", "#b23a48", "#3a7d44", "#6a4c93", "#d17a22", "#1f7a8c", "#8c5e3c", "#c0392b", "#46607a", "#7a8b2b"];
+const SLOTS = { QB: ["QB"], RB: ["RB"], WR: ["WR"], TE: ["TE"], K: ["K"], DEF: ["DEF"],
+  FLEX: ["RB", "WR", "TE"], WRRB_FLEX: ["RB", "WR"], REC_FLEX: ["WR", "TE"], SUPER_FLEX: ["QB", "RB", "WR", "TE"] };
+const OUT_NOW = new Set(["Out", "Doubtful", "Sus"]);
+const OUT_LONG = new Set(["IR", "PUP", "NFI"]);  // assume these miss the next few weeks too
+const $ = id => document.getElementById(id);
+
+// ---------- storage (per browser) and share links ----------
+const store = {
+  get(k) { try { return JSON.parse(localStorage.getItem("leverage:" + k)); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem("leverage:" + k, JSON.stringify(v)); } catch (e) {} },
+};
+const params = new URLSearchParams(location.search);
+function rulesToParam(r) { return `${r.div}-${r.rec}-${r.pts}`; }
+function paramToRules(s) {
+  const m = /^(\d+)-(\d+)-(\d+)$/.exec(s || "");
+  return m ? { div: +m[1], rec: +m[2], pts: +m[3] } : null;
+}
+function updateURL() {
+  const p = new URLSearchParams();
+  if (S.username) p.set("u", S.username);
+  if (S.league) { p.set("l", S.league.league_id); p.set("r", rulesToParam(S.rules)); }
+  history.replaceState(null, "", `${location.pathname}?${p}`);
+}
+
+// ---------- fetching ----------
+async function getJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Sleeper returned ${r.status} for ${url.replace(/\?.*/, "")}`);
+  return r.json();
+}
+const projCache = new Map();
+function projections(season, week) {
+  if (!projCache.has(week)) {
+    const q = ["QB", "RB", "WR", "TE", "K", "DEF"].map(p => `position%5B%5D=${p}`).join("&");
+    projCache.set(week, getJSON(`${PROJ}/${season}/${week}?season_type=regular&${q}`)
+      .then(list => new Map(list.map(x => [x.player_id, x]))));
+  }
+  return projCache.get(week);
+}
+// image -> data URL (keeps the PNG export untainted) plus a dominant colour for the bar
+async function avatarAndColor(url) {
+  if (!url) return [null, null];
+  try {
+    const blob = await (await fetch(url)).blob();
+    const bmp = await createImageBitmap(blob);
+    const cv = document.createElement("canvas"); cv.width = cv.height = 96;
+    const ctx = cv.getContext("2d");
+    const s = Math.min(bmp.width, bmp.height);
+    ctx.drawImage(bmp, (bmp.width - s) / 2, (bmp.height - s) / 2, s, s, 0, 0, 96, 96);
+    const uri = cv.toDataURL("image/jpeg", .82);
+    const px = ctx.getImageData(0, 0, 96, 96).data, bins = new Map();
+    for (let i = 0; i < px.length; i += 16) {
+      const r = px[i], g = px[i + 1], b = px[i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      if (mx < 40 || mn > 215 || mx - mn < 40) continue;  // skip near-black, near-white, grey
+      const k = (r >> 5) << 6 | (g >> 5) << 3 | (b >> 5);
+      const e = bins.get(k) || [0, 0, 0, 0]; e[0]++; e[1] += r; e[2] += g; e[3] += b; bins.set(k, e);
+    }
+    let best = null;
+    for (const e of bins.values()) if (!best || e[0] > best[0]) best = e;
+    const hex = v => Math.round(v).toString(16).padStart(2, "0");
+    return [uri, best ? `#${hex(best[1] / best[0])}${hex(best[2] / best[0])}${hex(best[3] / best[0])}` : null];
+  } catch (e) { return [null, null]; }
+}
+
+// ---------- scoring ----------
+function fantasyPoints(stats, scoring) {
+  let pts = 0;
+  for (const k in scoring) pts += (stats[k] || 0) * scoring[k];
+  if ("fgm_50_59" in scoring && !("fgm_50_59" in stats)) pts += (stats.fgm_50p || 0) * scoring.fgm_50_59;
+  if ("fgm_50p" in scoring && !("fgm_50p" in stats)) pts += ((stats.fgm_50_59 || 0) + (stats.fgm_60p || 0)) * scoring.fgm_50p;
+  if ("fgmiss" in scoring && !("fgmiss" in stats)) pts += ((stats.fga || 0) - (stats.fgm || 0)) * scoring.fgmiss;
+  return pts;
+}
+// highest projected score a roster can field: fill strict slots first, then flexes
+function bestLineup(players, proj, week, firstWeek, scoring, slots) {
+  const pool = [];
+  for (const pid of players) {
+    const x = proj.get(pid);
+    if (!x || !x.stats) continue;  // bye week or no projection
+    const inj = x.player && x.player.injury_status;
+    if ((week === firstWeek && OUT_NOW.has(inj)) || (week < firstWeek + 3 && OUT_LONG.has(inj))) continue;
+    pool.push([fantasyPoints(x.stats, scoring), x.player.position]);
+  }
+  pool.sort((a, b) => b[0] - a[0]);
+  const used = new Array(pool.length).fill(false);
+  let total = 0;
+  for (const slot of [...slots].sort((a, b) => SLOTS[a].length - SLOTS[b].length)) {
+    for (let j = 0; j < pool.length; j++) {
+      if (!used[j] && SLOTS[slot].includes(pool[j][1])) { used[j] = true; total += Math.max(pool[j][0], 0); break; }
+    }
+  }
+  return total;
+}
+
+// ---------- league data ----------
+const leagueCache = new Map();
+async function loadLeague(lg, season, onStep) {
+  if (leagueCache.has(lg.league_id)) return leagueCache.get(lg.league_id);
+  const s = lg.settings, L = lg.league_id;
+  onStep("Loading rosters…");
+  const [rosters, users] = await Promise.all([getJSON(`${API}/league/${L}/rosters`), getJSON(`${API}/league/${L}/users`)]);
+  const userById = new Map(users.map(u => [u.user_id, u]));
+  const median = !!s.league_average_match, poStart = s.playoff_week_start || 15;
+  const T = rosters.length;
+  const r0 = rosters[0].settings, games = r0.wins + r0.losses + (r0.ties || 0);
+  const done = median ? Math.floor(games / 2) : games;   // completed weeks
+  const levWeek = done + 1;
+  const base = { lg, rosters, T, median, poStart, done, levWeek, season };
+  if (levWeek >= poStart) { leagueCache.set(L, base); return base; }
+
+  onStep("Loading schedule…");
+  const weeks = [];
+  for (let w = 1; w < poStart; w++) weeks.push(w);
+  const weekly = await Promise.all(weeks.map(w => getJSON(`${API}/league/${L}/matchups/${w}`)));
+  const idx = new Map(rosters.map((r, i) => [r.roster_id, i]));
+  const hist = rosters.map(r => weekly.slice(0, done).map(ms => (ms.find(m => m.roster_id === r.roster_id) || {}).points || 0));
+  const future = weeks.filter(w => w >= levWeek);
+  const pairs = future.map(w => {
+    const by = new Map();
+    for (const m of weekly[w - 1]) {
+      if (m.matchup_id == null) continue;
+      if (!by.has(m.matchup_id)) by.set(m.matchup_id, []);
+      by.get(m.matchup_id).push(idx.get(m.roster_id));
+    }
+    return [...by.values()].filter(v => v.length === 2);
+  });
+
+  // weekly spread: each team's scores around its own average, pooled
+  let ss = 0, cnt = 0, all = 0;
+  for (const h of hist) { const m = h.reduce((a, b) => a + b, 0) / (h.length || 1); for (const v of h) { ss += (v - m) ** 2; all += v; } cnt += Math.max(h.length - 1, 0); }
+  const leagueMean = done ? all / (T * done) : 0;
+
+  onStep("Loading projections…");
+  let mu, model = "projections";
+  try {
+    const slots = lg.roster_positions.filter(p => SLOTS[p]);
+    const projs = await Promise.all(future.map(w => projections(season, w)));
+    mu = future.map((w, wi) => rosters.map(r => {
+      const taxi = new Set(r.taxi || []);
+      return bestLineup((r.players || []).filter(p => !taxi.has(p)), projs[wi], w, levWeek, lg.scoring_settings, slots);
+    }));
+  } catch (e) {
+    if (!done) throw new Error("No projections available and no games played yet, so there's nothing to simulate.");
+    model = "history";
+    const teamMu = hist.map(h => (h.reduce((a, b) => a + b, 0) + SHRINK_WEEKS * leagueMean) / (done + SHRINK_WEEKS));
+    mu = future.map(() => teamMu);
+  }
+  const avgMu = mu.flat().reduce((a, b) => a + b, 0) / (mu.length * T || 1);
+  const sd = cnt > T ? Math.sqrt(ss / cnt) : 0.2 * (avgMu || 100);
+
+  onStep("Loading team pictures…");
+  const teams = await Promise.all(rosters.map(async (r, i) => {
+    const u = userById.get(r.owner_id) || {}, meta = u.metadata || {};
+    const owner = u.display_name || `Team ${r.roster_id}`;
+    const team = (meta.team_name || "").trim().replace(/\s+/g, " ");
+    const userPic = u.avatar ? `https://sleepercdn.com/avatars/thumbs/${u.avatar}` : null;
+    let [avatar, color] = await avatarAndColor(meta.avatar || userPic);
+    if (!avatar && meta.avatar && userPic) [avatar, color] = await avatarAndColor(userPic);
+    const st = r.settings;
+    return { name: team || owner, owner, avatar, color, wins: st.wins, losses: st.losses, ties: st.ties || 0,
+      pf: st.fpts + (st.fpts_decimal || 0) / 100, division: st.division || 0 };
+  }));
+  const data = Object.assign(base, { pairs, mu, sd, model, teams });
+  leagueCache.set(L, data);
+  return data;
+}
+
+// ---------- playoff rules ----------
+function divisionsOf(d) { return [...new Set(d.teams.map(t => t.division))].filter(x => x); }
+function sleeperRules(d) {
+  const spots = d.lg.settings.playoff_teams || 6, nDiv = divisionsOf(d).length;
+  return nDiv > 1 ? { div: 1, rec: Math.max(spots - nDiv, 0), pts: 0 } : { div: 0, rec: spots, pts: 0 };
+}
+function rulesText(r, nDiv) {
+  const parts = [];
+  if (r.div && nDiv > 1) parts.push(`top ${r.div === 1 ? "team" : r.div} in each division`);
+  if (r.rec) parts.push(`${r.rec} best remaining record${r.rec > 1 ? "s" : ""}`);
+  if (r.pts) parts.push(`${r.pts} most remaining points for`);
+  return parts.join(", then ");
+}
+
+// ---------- simulation ----------
+function rng(seed) {  // mulberry32
+  return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+async function simulate(d, rules, onProgress) {
+  const { T, pairs, mu, sd, median, teams } = d, W = pairs.length;
+  const divs = teams.map(t => t.division), divList = divisionsOf(d);
+  const useDiv = rules.div > 0 && divList.length > 1;
+  const members = divList.map(v => divs.map((x, i) => x === v ? i : -1).filter(i => i >= 0));
+  const rec = teams.map(t => t.wins + .5 * t.ties);
+  const made = new Float64Array(T), madeWin = new Float64Array(T), nWin = new Float64Array(T);
+  const wins = new Float64Array(T), pts = new Float64Array(T), sc = new Float64Array(T), tmp = new Float64Array(T);
+  const levWin = new Uint8Array(T), pick = new Uint8Array(T), order = [...Array(T).keys()];
+  const rand = rng(7);
+  let spare = null;
+  const normal = () => {
+    if (spare !== null) { const v = spare; spare = null; return v; }
+    let u = 0; while (u === 0) u = rand();
+    const v = rand(), m = Math.sqrt(-2 * Math.log(u));
+    spare = m * Math.sin(2 * Math.PI * v); return m * Math.cos(2 * Math.PI * v);
+  };
+  const key = i => wins[i] * 1e6 + pts[i];  // record first, then points for
+  const CHUNK = 2500;
+  for (let s0 = 0; s0 < N_SIMS; s0 += CHUNK) {
+    for (let s = s0; s < Math.min(s0 + CHUNK, N_SIMS); s++) {
+      for (let i = 0; i < T; i++) { wins[i] = rec[i]; pts[i] = teams[i].pf; }
+      for (let w = 0; w < W; w++) {
+        for (let i = 0; i < T; i++) { sc[i] = mu[w][i] + sd * normal(); pts[i] += sc[i]; }
+        for (const [a, b] of pairs[w]) {
+          const aw = sc[a] > sc[b];
+          wins[aw ? a : b] += 1;
+          if (w === 0) { levWin[a] = aw; levWin[b] = !aw; }
+        }
+        if (median) {
+          tmp.set(sc); tmp.sort();
+          const med = T % 2 ? tmp[(T - 1) / 2] : (tmp[T / 2 - 1] + tmp[T / 2]) / 2;
+          for (let i = 0; i < T; i++) if (sc[i] > med) wins[i] += 1;
+        }
+      }
+      pick.fill(0);
+      if (useDiv) for (const m of members) {
+        m.sort((a, b) => key(b) - key(a));
+        for (let k = 0; k < Math.min(rules.div, m.length); k++) pick[m[k]] = 1;
+      }
+      order.sort((a, b) => key(b) - key(a));
+      for (let k = 0, n = 0; k < T && n < rules.rec; k++) if (!pick[order[k]]) { pick[order[k]] = 1; n++; }
+      order.sort((a, b) => pts[b] - pts[a]);
+      for (let k = 0, n = 0; k < T && n < rules.pts; k++) if (!pick[order[k]]) { pick[order[k]] = 1; n++; }
+      for (let i = 0; i < T; i++) {
+        made[i] += pick[i];
+        if (levWin[i]) { nWin[i]++; madeWin[i] += pick[i]; }
+      }
+    }
+    onProgress(Math.min(s0 + CHUNK, N_SIMS) / N_SIMS);
+    await new Promise(r => setTimeout(r));  // keep the page responsive
+  }
+  return { made, madeWin, nWin };
+}
+
+// Mathematical clinch / elimination by record alone, shown with standings letters:
+// x = clinched playoffs, y = clinched division, e = eliminated. Ties in record go to
+// points for, which can't be bounded, so a tie always counts against the team.
+// These are sufficient conditions: a letter is never shown wrongly.
+//   Clinched: fewer than k division-mates can catch the team (k = division spots), or
+//   fewer than k + B teams overall can (B = record spots). If the team misses its
+//   division's top k, those k division-mates are all ahead of it, so at most
+//   (others ahead - k) unpicked teams stay ahead of it when the B record spots are handed out.
+//   Eliminated: with no points-for spots, k division-mates and kD + B teams overall
+//   (D divisions) finish ahead no matter what. Points for has no ceiling, so any
+//   points-for spot keeps everyone alive until the season ends.
+function standings(d, rules) {
+  const { T, teams, pairs, median } = d, W = pairs.length;
+  const divs = teams.map(t => t.division), nDiv = divisionsOf(d).length;
+  const k = nDiv > 1 ? rules.div : 0, B = rules.rec;
+  const lo0 = teams.map(t => t.wins + .5 * t.ties), hi0 = lo0.map(v => v + W * (median ? 2 : 1));
+  const one = (i, lo, hi) => {
+    let catchAll = 0, aheadAll = 0, catchMates = 0, aheadMates = 0;
+    for (let j = 0; j < T; j++) {
+      if (j === i) continue;
+      const c = hi[j] >= lo[i], a = lo[j] > hi[i];
+      catchAll += c; aheadAll += a;
+      if (k && divs[j] === divs[i]) { catchMates += c; aheadMates += a; }
+    }
+    if (k && catchMates === 0) return "y";
+    if ((k && catchMates < k) || catchAll < k + B) return "x";
+    if (!rules.pts && (!k || aheadMates >= k) && aheadAll >= k * nDiv + B) return "e";
+    return null;
+  };
+  const opp = new Map();
+  for (const [a, b] of pairs[0] || []) { opp.set(a, b); opp.set(b, a); }
+  return teams.map((t, i) => {
+    const o = opp.get(i);
+    // this week's head-to-head result only; a median game stays open
+    const lw = [...lo0], hw = [...hi0]; lw[i] += 1; if (o != null) hw[o] -= 1;
+    const ll = [...lo0], hl = [...hi0]; hl[i] -= 1; if (o != null) ll[o] += 1;
+    return { now: one(i, lo0, hi0), win: one(i, lw, hw), loss: one(i, ll, hl) };
+  });
+}
+
+async function compute(d, rules, onProgress) {
+  const sim = await simulate(d, rules, onProgress);
+  const st = standings(d, rules);
+  const opp = new Map();
+  for (const [a, b] of d.pairs[0] || []) { opp.set(a, b); opp.set(b, a); }
+  const rows = d.teams.map((t, i) => Object.assign({}, t, {
+    now: sim.made[i] / N_SIMS,
+    win: sim.nWin[i] ? sim.madeWin[i] / sim.nWin[i] : sim.made[i] / N_SIMS,
+    loss: N_SIMS - sim.nWin[i] ? (sim.made[i] - sim.madeWin[i]) / (N_SIMS - sim.nWin[i]) : sim.made[i] / N_SIMS,
+    status: st[i].now, status_win: st[i].win, status_loss: st[i].loss,
+    proj: d.model === "projections" ? d.mu[0][i] : null,
+    opp: opp.has(i) ? d.teams[opp.get(i)].name : null,
+  }));
+  rows.sort((a, b) => b.now - a.now || b.win - a.win);
+  return rows;
+}
+
+// ---------- chart ----------
+function pct(p) {
+  if (p >= 1) return "100%";
+  if (p <= 0) return "0%";
+  if (p < .005) return "<1%";
+  if (p >= .995) return ">99%";
+  return Math.round(p * 100) + "%";
+}
+function el(tag, attrs, parent) {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function text(parent, x, y, str, attrs) {
+  const t = el("text", Object.assign({ x, y, "dominant-baseline": "central" }, attrs), parent);
+  t.textContent = str;
+  return t;
+}
+function colorFor(t, i) { return t.color || FALLBACK[[...t.name].reduce((a, c) => a + c.charCodeAt(0), i) % FALLBACK.length]; }
+
+function render(view) {
+  const rows = view.rows, n = rows.length;
+  const W = 1000, X0 = 64, TOP = 30;
+  // shrink the probability scale until every row's win label and team name fit
+  const FS = n > 16 ? 19 : 22;
+  const X1 = Math.min(800, ...rows.filter(t => t.win > 0).map(t => {
+    const extra = 16 + 4 * FS * .5 + 10 + t.name.length * (FS - 4) * .5 + 8;
+    return X0 + (W - extra - X0) / t.win;
+  }));
+  const RH = n > 16 ? 36 : 54, AV = n > 16 ? 15 : 20;
+  const x = p => X0 + p * (X1 - X0);
+  // legend sits bottom-right when the lower rows leave room for it
+  const LEG_W = 330, LEG_H = 196;
+  const legRows = Math.ceil(LEG_H / RH) + 1;
+  const lowMax = Math.max(...rows.slice(-legRows).map(t => x(t.win) + 130));
+  const legInside = lowMax < W - LEG_W - 20;
+  const H = TOP + n * RH + (legInside ? 10 : LEG_H + 30);
+
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Playoff odds if win or loss in week ${view.week} for ${view.name}` });
+  const defs = el("defs", {}, svg);
+
+  rows.forEach((t, i) => {
+    const y = TOP + i * RH + RH / 2, c = colorFor(t, i);
+    const xl = x(t.loss), xn = x(t.now), xw = x(t.win);
+    const g = el("g", { class: "row", tabindex: 0, "data-i": i }, svg);
+    if (t.status === "e") g.setAttribute("opacity", .42);
+    // full-width hit area so hovering a row doesn't flicker between its pieces
+    el("rect", { x: 0, y: y - RH / 2, width: W, height: RH, fill: "transparent" }, g);
+    const thick = n > 16 ? 5.5 : 7, thin = 1.6;
+    el("path", {
+      d: `M${xl},${y - thick} L${xn},${y - thin} L${xw},${y - thick} L${xw},${y + thick} L${xn},${y + thin} L${xl},${y + thick} Z`,
+      fill: c, stroke: "var(--edge)", "stroke-width": 1, "stroke-linejoin": "round"
+    }, g);
+    for (const cx of [xl, xw]) el("circle", { cx, cy: y, r: thick + 2.5, fill: "var(--paper)", stroke: c, "stroke-width": 3.2 }, g);
+    // avatar at current probability
+    const id = `av${i}`;
+    const cp = el("clipPath", { id }, defs);
+    el("circle", { cx: xn, cy: y, r: AV }, cp);
+    el("circle", { cx: xn, cy: y, r: AV + 2.5, fill: "var(--paper)", stroke: c, "stroke-width": 2.5, class: "ring" }, g);
+    if (t.avatar) el("image", { href: t.avatar, x: xn - AV, y: y - AV, width: AV * 2, height: AV * 2, "clip-path": `url(#${id})`, preserveAspectRatio: "xMidYMid slice" }, g);
+    else {
+      el("circle", { cx: xn, cy: y, r: AV, fill: c }, g);
+      text(g, xn, y + 1, (t.name[0] || "?").toUpperCase(), { "text-anchor": "middle", fill: "#fff", "font-weight": 700, "font-size": AV });
+    }
+    const fs = FS, gap = thick + 9;
+    // keep labels clear of the avatar when the swing is small
+    const lx = Math.min(xl - gap, xn - AV - 7), wx = Math.max(xw + gap, xn + AV + 7);
+    // a settled outcome shows its standings letter (x / y / e) instead of a percent
+    const lossL = t.status_loss || t.status, winL = t.status_win || t.status;
+    const label = (p, L, side, anchor, at) => text(g, at, y, L || pct(p), Object.assign(
+      { fill: `var(--${side})`, "font-size": L ? fs + 3 : fs }, L ? { "font-weight": 700 } : {}, anchor ? { "text-anchor": anchor } : {}));
+    label(t.loss, lossL, "loss", "end", lx);
+    label(t.win, winL, "win", null, wx);
+    const nameX = wx + ((winL || pct(t.win)).length * fs * .5) + 10;
+    text(g, nameX, y, t.name, { fill: "var(--ink-soft)", "font-size": fs - 4 });
+  });
+
+  // legend
+  const lx = legInside ? W - LEG_W - 10 : (W - LEG_W) / 2, ly = legInside ? H - LEG_H - 10 : TOP + n * RH + 24;
+  const lg_ = el("g", { "aria-hidden": "true" }, svg);
+  const bx0 = lx + 20, bx1 = lx + LEG_W - 20, bm = (bx0 + bx1) / 2, by = ly + 92;
+  text(lg_, bm, ly + 18, "Current Playoff", { "text-anchor": "middle", fill: "var(--ink)", "font-size": 20, "font-weight": 700 });
+  text(lg_, bm, ly + 42, "Probability", { "text-anchor": "middle", fill: "var(--ink)", "font-size": 20, "font-weight": 700 });
+  text(lg_, bx0 - 8, ly + 40, `% If Loss In`, { fill: "var(--loss)", "font-size": 19, "font-weight": 700 });
+  text(lg_, bx0 - 8, ly + 64, `Week ${view.week}`, { fill: "var(--loss)", "font-size": 19, "font-weight": 700 });
+  text(lg_, bx1 + 8, ly + 40, `% If Win In`, { "text-anchor": "end", fill: "var(--win)", "font-size": 19, "font-weight": 700 });
+  text(lg_, bx1 + 8, ly + 64, `Week ${view.week}`, { "text-anchor": "end", fill: "var(--win)", "font-size": 19, "font-weight": 700 });
+  el("path", { d: `M${bx0},${by - 5} L${bm},${by - 1.6} L${bx1},${by - 5} L${bx1},${by + 5} L${bm},${by + 1.6} L${bx0},${by + 5} Z`, fill: "var(--ink)" }, lg_);
+  for (const cx of [bx0, bx1]) el("circle", { cx, cy: by, r: 7.5, fill: "var(--paper)", stroke: "var(--ink)", "stroke-width": 3 }, lg_);
+  el("circle", { cx: bm, cy: by, r: 17, fill: "var(--paper)", stroke: "var(--ink)", "stroke-width": 2.5 }, lg_);
+  text(lg_, bm, by + 1, "%", { "text-anchor": "middle", fill: "var(--ink)", "font-size": 17, "font-weight": 700 });
+  text(lg_, bm, by + 42, `Probabilities are based on ${N_SIMS.toLocaleString("en-US")} simulations`, { "text-anchor": "middle", fill: "var(--ink-soft)", "font-size": 15 });
+  text(lg_, bm, by + 62, "of the rest of the regular season", { "text-anchor": "middle", fill: "var(--ink-soft)", "font-size": 15 });
+  const key = text(lg_, bm, by + 88, "", { "text-anchor": "middle", fill: "var(--ink-soft)", "font-size": 15 });
+  const keys = [["x", "clinched playoffs"]].concat(view.hasDiv ? [["y", "clinched division"]] : [], view.canEliminate ? [["e", "eliminated"]] : []);
+  keys.forEach(([L, words], k) => {
+    const b = el("tspan", { "font-weight": 700, fill: "var(--ink)" }, key); b.textContent = (k ? "  ·  " : "") + L;
+    key.appendChild(document.createTextNode(" " + words));
+  });
+  return svg;
+}
+
+const MEANS = { x: "Clinched playoffs", y: "Clinched division", e: "Eliminated" };
+function tipHTML(t) {
+  const show = (p, L) => L ? `<b>${L}</b> · ${MEANS[L]}` : pct(p);
+  const rec = `${t.wins}-${t.losses}${t.ties ? "-" + t.ties : ""}`;
+  const swing = Math.round((t.win - t.loss) * 100);
+  return `<strong></strong><div class="k" data-owner></div><div class="k">${rec} · ${t.pf.toFixed(1)} pts for</div>
+  <div class="grid"><span class="k">Now</span><span>${show(t.now, t.status)}</span>
+  <span style="color:var(--win)">With a win</span><span>${show(t.win, t.status_win || t.status)}</span>
+  <span style="color:var(--loss)">With a loss</span><span>${show(t.loss, t.status_loss || t.status)}</span>
+  <span class="k">Swing</span><span>${swing} pts</span></div>
+  <div class="k" data-opp></div>`;
+}
+
+// ---------- page state ----------
+const S = { username: "", season: "", leagues: [], league: null, data: null, rules: null, view: null, run: 0 };
+const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
+function setPlotMessage(msg) {
+  $("plot").innerHTML = "";
+  const p = document.createElement("p"); p.className = "empty"; p.textContent = msg;
+  $("plot").appendChild(p);
+  $("tools").hidden = true; $("you").textContent = ""; $("foot").innerHTML = "";
+}
+
+async function loadUser(name) {
+  S.username = name.trim();
+  if (!S.username) return;
+  store.set("username", S.username);
+  $("load-status").textContent = "Finding leagues…";
+  $("leagues").innerHTML = ""; $("rules").hidden = true;
+  try {
+    const state = await getJSON(`${API}/state/nfl`);
+    S.season = state.league_season || state.season;
+    const user = await getJSON(`${API}/user/${encodeURIComponent(S.username)}`);
+    if (!user || !user.user_id) throw new Error(`No Sleeper user named "${S.username}".`);
+    S.leagues = await getJSON(`${API}/user/${user.user_id}/leagues/nfl/${S.season}`);
+  } catch (e) {
+    $("load-status").textContent = e.message; setPlotMessage("Couldn't load leagues."); return;
+  }
+  $("load-status").textContent = S.leagues.length ? "" : `No ${S.season} leagues for ${S.username}.`;
+  for (const lg of S.leagues) {
+    const b = document.createElement("button");
+    b.type = "button"; b.id = "league-" + lg.league_id;
+    b.innerHTML = `<span></span><small>${lg.total_rosters} teams</small>`;
+    b.firstChild.textContent = lg.name;
+    b.addEventListener("click", () => selectLeague(lg));
+    $("leagues").appendChild(b);
+  }
+  const want = params.get("l") || store.get("league");
+  const lg = S.leagues.find(l => l.league_id === want) || S.leagues[0];
+  if (lg) selectLeague(lg);
+}
+
+async function selectLeague(lg) {
+  const run = ++S.run;
+  S.league = lg; store.set("league", lg.league_id);
+  document.querySelectorAll("#leagues button").forEach(b => b.setAttribute("aria-pressed", b.id === "league-" + lg.league_id));
+  $("sub").innerHTML = "<b></b>"; $("sub").firstChild.textContent = `${S.season} ${lg.name}`;
+  setPlotMessage("Loading…");
+  let d;
+  try { d = await loadLeague(lg, S.season, msg => { if (run === S.run) setPlotMessage(msg); }); }
+  catch (e) { if (run === S.run) setPlotMessage("Couldn't load this league: " + e.message); return; }
+  if (run !== S.run) return;
+  S.data = d;
+  if (d.levWeek >= d.poStart) { $("rules").hidden = true; setPlotMessage("This league's regular season is over."); return; }
+  // rules: share link first (for this league), then this browser's saved rules, then Sleeper's settings
+  const fromURL = params.get("l") === lg.league_id ? paramToRules(params.get("r")) : null;
+  S.rules = fromURL || store.get("rules:" + lg.league_id) || sleeperRules(d);
+  if (fromURL) store.set("rules:" + lg.league_id, fromURL);
+  fillRulesForm();
+  await run_(run);
+}
+
+async function run_(run) {
+  const d = S.data, lg = S.league;
+  updateURL();
+  setPlotMessage("Simulating 0%");
+  const rows = await compute(d, S.rules, f => { if (run === S.run) setPlotMessage(`Simulating ${Math.round(f * 100)}%`); });
+  if (run !== S.run) return;
+  const nDiv = divisionsOf(d).length;
+  S.view = { name: lg.name, season: S.season, week: d.levWeek, rows, teams: d.T,
+    spots: (nDiv > 1 ? S.rules.div * nDiv : 0) + S.rules.rec + S.rules.pts,
+    hasDiv: nDiv > 1 && S.rules.div > 0, canEliminate: !S.rules.pts, model: d.model, median: d.median };
+  draw();
+}
+
+function draw() {
+  const v = S.view, lg = S.league;
+  $("sub").innerHTML = "<b></b> going into week " + v.week;
+  $("sub").firstChild.textContent = `${v.season} ${lg.name}`;
+  const swings = [...v.rows].sort((a, b) => (b.win - b.loss) - (a.win - a.loss)).slice(0, 3);
+  const you = $("you");
+  you.textContent = `${v.spots} of ${v.teams} teams make the playoff. Most on the line in week ${v.week}: `;
+  swings.forEach((t, k) => {
+    const b = document.createElement("b"); b.textContent = t.name;
+    you.append(b, ` (${Math.round((t.win - t.loss) * 100)}-point swing)${k < swings.length - 1 ? ", " : "."}`);
+  });
+
+  const plot = $("plot"), tip = $("tip");
+  plot.innerHTML = "";
+  $("preview").hidden = true; $("status").textContent = ""; $("tools").hidden = false;
+  const svg = render(v);
+  plot.appendChild(svg);
+  tip.hidden = true;
+  svg.querySelectorAll(".row").forEach(g => {
+    const t = v.rows[+g.dataset.i];
+    const open = () => {
+      tip.innerHTML = tipHTML(t);
+      tip.querySelector("strong").textContent = t.name;
+      tip.querySelector("[data-owner]").textContent = t.owner !== t.name ? t.owner : "";
+      const o = v.rows.find(r => r.name === t.opp);
+      tip.querySelector("[data-opp]").textContent = !t.opp ? ""
+        : t.proj != null && o ? `Week ${v.week}: projected ${t.proj.toFixed(1)} vs ${t.opp} ${o.proj.toFixed(1)}`
+        : `Week ${v.week} vs ${t.opp}`;
+      tip.hidden = false;
+      // fixed to the window, beside the row so it never covers the neighbours
+      const texts = g.querySelectorAll("text"), name = texts[texts.length - 1].getBoundingClientRect();
+      const loss = texts[0].getBoundingClientRect(), ring = g.querySelector(".ring").getBoundingClientRect();
+      const tw = tip.offsetWidth, th = tip.offsetHeight, vw = innerWidth, vh = innerHeight;
+      let left = name.right + 16;
+      if (left + tw > vw - 8) left = loss.left - tw - 16;
+      if (left < 8) left = Math.max(8, Math.min(ring.left, vw - tw - 8));
+      tip.style.left = left + "px";
+      tip.style.top = Math.max(8, Math.min(ring.top + ring.height / 2 - th / 2, vh - th - 8)) + "px";
+    };
+    g.addEventListener("mouseenter", open);
+    g.addEventListener("focus", open);
+    g.addEventListener("click", open);
+    g.addEventListener("mouseleave", () => tip.hidden = true);
+    g.addEventListener("blur", () => tip.hidden = true);
+  });
+
+  const model = v.model === "projections"
+    ? "Each team's expected score every week is the best lineup its current roster can field, using Sleeper's player projections in this league's scoring. Players on bye or ruled out are left out. "
+    : "Sleeper projections weren't available, so each team's weekly score is drawn from its scoring average so far, pulled toward the league average. ";
+  $("foot").innerHTML = `<p>${model}${v.median ? "Every week also counts a win or loss against the league median. " : ""}` +
+    `Playoff spots: <span data-rules></span>. Records tie-break on points for. ` +
+    `A letter replaces a percent once the outcome is mathematically certain from records, no matter how other games go: ` +
+    `x clinched playoffs${v.hasDiv ? ", y clinched the division" : ""}${v.canEliminate ? ", e eliminated" : " (a points-for spot keeps everyone alive until the regular season ends)"}. ` +
+    `Hover or tap a team for its owner and details.</p>` +
+    `<p>Data loaded from Sleeper on ${today}. Week ${v.week} games still in progress are not counted.</p>`;
+  $("foot").querySelector("[data-rules]").textContent = rulesText(S.rules, divisionsOf(S.data).length);
+}
+
+// ---------- rules form ----------
+function fillRulesForm() {
+  const d = S.data, nDiv = divisionsOf(d).length;
+  $("rules").hidden = false;
+  $("r-div").value = nDiv > 1 ? S.rules.div : 0;
+  $("r-div").disabled = nDiv < 2;
+  $("r-div-hint").textContent = nDiv > 1 ? `(${nDiv} divisions)` : "(this league has no divisions)";
+  $("r-rec").value = S.rules.rec; $("r-pts").value = S.rules.pts;
+  $("rules-summary").textContent = "· " + rulesText(S.rules, nDiv);
+  updateTotal();
+}
+function formRules() {
+  const n = id => Math.max(0, Math.floor(+$(id).value || 0));
+  return { div: n("r-div"), rec: n("r-rec"), pts: n("r-pts") };
+}
+function updateTotal() {
+  const d = S.data, nDiv = divisionsOf(d).length, r = formRules();
+  const total = (nDiv > 1 ? r.div * nDiv : 0) + r.rec + r.pts, sleeper = d.lg.settings.playoff_teams;
+  const t = $("r-total");
+  t.textContent = `${total} playoff team${total === 1 ? "" : "s"}` + (total !== sleeper ? ` (Sleeper says ${sleeper})` : "");
+  t.classList.toggle("off", total !== sleeper || total === 0 || total > d.T);
+  $("r-apply").disabled = total === 0 || total > d.T;
+}
+["r-div", "r-rec", "r-pts"].forEach(id => $(id).addEventListener("input", updateTotal));
+$("r-apply").addEventListener("click", () => {
+  S.rules = formRules(); store.set("rules:" + S.league.league_id, S.rules);
+  fillRulesForm(); run_(++S.run);
+});
+$("r-reset").addEventListener("click", () => {
+  S.rules = sleeperRules(S.data); store.set("rules:" + S.league.league_id, null);
+  fillRulesForm(); run_(++S.run);
+});
+
+// ---------- export: the chart plus a title block, drawn to a canvas as a PNG ----------
+let fontCSS = null;
+async function embeddedFonts() {
+  if (fontCSS !== null) return fontCSS;
+  const toData = async url => {
+    const b = await (await fetch(url)).blob();
+    return new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(b); });
+  };
+  try {
+    const css = $("fontfaces").textContent, urls = [...css.matchAll(/url\(([^)]+)\)/g)].map(m => m[1]);
+    let out = css;
+    for (const u of urls) out = out.replace(u, await toData(u));
+    fontCSS = out;
+  } catch (e) { fontCSS = ""; }  // e.g. opened from a file: the image falls back to system fonts
+  return fontCSS;
+}
+async function chartPNG() {
+  const v = S.view;
+  const src = $("plot").querySelector("svg");
+  const [, , W, H] = src.getAttribute("viewBox").split(" ").map(Number);
+  const HEAD = 150, FOOT = 34, TH = H + HEAD + FOOT;
+  const cs = getComputedStyle(document.documentElement);
+  const out = document.createElementNS(NS, "svg");
+  out.setAttribute("xmlns", NS);
+  out.setAttribute("viewBox", `0 0 ${W} ${TH}`);
+  out.setAttribute("width", W); out.setAttribute("height", TH);
+  el("style", {}, out).textContent = await embeddedFonts() + ` text { font-family: "Roboto Condensed", "Arial Narrow", sans-serif; font-variant-numeric: tabular-nums; }`;
+  const f = el("filter", { id: "grain", x: 0, y: 0, width: "100%", height: "100%" }, el("defs", {}, out));
+  el("feTurbulence", { type: "fractalNoise", baseFrequency: ".85", numOctaves: 3, stitchTiles: "stitch" }, f);
+  el("feColorMatrix", { values: "0 0 0 0 .45 0 0 0 0 .4 0 0 0 0 .33 0 0 0 .14 0" }, f);
+  el("rect", { width: W, height: TH, fill: "var(--paper)" }, out);
+  el("rect", { width: W, height: TH, filter: "url(#grain)" }, out);
+  text(out, 36, 62, "Fantasy Playoff Leverage", { fill: "var(--ink)", "font-size": 56, "font-weight": 800, style: "font-family: Rubik, 'Arial Black', sans-serif" });
+  const sub = text(out, 38, 116, "", { fill: "var(--ink)", "font-size": 30 });
+  el("tspan", { "font-weight": 700 }, sub).textContent = `${v.season} ${v.name}`;
+  sub.appendChild(document.createTextNode(` going into week ${v.week}`));
+  const g = el("g", { transform: `translate(0 ${HEAD})` }, out);
+  for (const c of src.childNodes) g.appendChild(c.cloneNode(true));
+  text(out, W - 24, TH - 18, `Sleeper data, ${today}`, { "text-anchor": "end", fill: "var(--ink-soft)", "font-size": 15 });
+  // the image is its own document, so resolve every colour token to a literal
+  const xml = new XMLSerializer().serializeToString(out).replace(/var\((--[\w-]+)\)/g, (_, n) => cs.getPropertyValue(n).trim());
+  const url = URL.createObjectURL(new Blob([xml], { type: "image/svg+xml" }));
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = async () => {
+      try { await img.decode(); } catch (e) {}
+      await new Promise(r => setTimeout(r, 120));  // let embedded fonts settle
+      const scale = 2, cv = document.createElement("canvas");
+      cv.width = W * scale; cv.height = TH * scale;
+      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      cv.toBlob(bl => bl ? resolve(bl) : reject(new Error("empty image")), "image/png");
+    };
+    img.onerror = () => reject(new Error("could not draw the chart"));
+    img.src = url;
+  });
+}
+function showPreview(blob) {
+  const im = $("preview-img");
+  if (im.src) URL.revokeObjectURL(im.src);
+  im.src = URL.createObjectURL(blob);
+  $("preview").hidden = false;
+}
+$("copy-png").addEventListener("click", async () => {
+  const status = $("status");
+  status.textContent = "Making image…";
+  const pending = chartPNG();
+  try {
+    await Promise.race([
+      navigator.clipboard.write([new ClipboardItem({ "image/png": pending })]),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timed out")), 5000)),
+    ]);
+    status.textContent = "Copied. Paste it anywhere.";
+  } catch (e) {
+    try { showPreview(await pending); status.textContent = "Your browser blocked image copying here, so the image is shown below."; }
+    catch (e2) { status.textContent = "Couldn't make the image: " + e2.message; }
+  }
+});
+$("show-png").addEventListener("click", async () => {
+  $("status").textContent = "Making image…";
+  try { showPreview(await chartPNG()); $("status").textContent = ""; }
+  catch (e) { $("status").textContent = "Couldn't make the image: " + e.message; }
+});
+$("copy-link").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(location.href); $("status").textContent = "Link copied. It opens this league with these playoff rules."; }
+  catch (e) { $("status").textContent = location.href; }
+});
+
+const hideTip = () => { $("tip").hidden = true; };
+addEventListener("scroll", hideTip, { passive: true });
+$("plot").addEventListener("scroll", hideTip, { passive: true });
+
+$("who").addEventListener("submit", e => { e.preventDefault(); loadUser($("username").value); });
+const startUser = params.get("u") || store.get("username");
+if (startUser) { $("username").value = startUser; loadUser(startUser); }
+</script>
+</body>
+</html>

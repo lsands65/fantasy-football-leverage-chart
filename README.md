@@ -1,0 +1,44 @@
+# Fantasy Football Leverage Chart
+
+Playoff odds for every team in a Sleeper league: now, with a win this week, and with a loss this week.
+Styled after the NFL playoff leverage charts by mrcaseb.
+
+Everything runs in the browser. There's no server and no build step.
+
+## Use it
+
+1. Open the page and enter a Sleeper username.
+2. Pick a league.
+3. Optional: open **Playoff rules** to match your league's format, then **Apply rules**.
+4. Use **Copy chart as PNG** to paste the chart into a group chat, or **Copy share link** to send the page.
+
+The share link includes the username, league and playoff rules, so everyone who opens it sees the same chart.
+The last username, league and rules are also remembered in your browser (`localStorage`).
+
+## How the odds work
+
+- Each team's expected score each remaining week is the best lineup its current roster can field,
+  using Sleeper's player projections scored with the league's own settings.
+  Players on bye or ruled out are left out.
+- Week-to-week spread comes from how much each team's scores have varied this season.
+- 50,000 simulated seasons. Leagues with a median game count it every week.
+- Playoff spots are filled in order: top teams in each division, then best remaining records
+  (ties broken by points for), then most remaining points for.
+- **x** / **y** / **e** replace a percentage once a team has mathematically clinched a playoff spot,
+  clinched its division, or been eliminated, based on records alone.
+  These letters never show early, but they can show up a week later than the earliest possible moment.
+
+If Sleeper's projections can't be loaded, it falls back to each team's scoring average so far.
+
+## Publish with GitHub Pages
+
+Settings → Pages → Build and deployment → Source: **Deploy from a branch**, Branch: **main**, folder **/ (root)**.
+The site will be at `https://lsands65.github.io/fantasy-football-leverage-chart/`.
+
+To try it locally, serve the folder (opening `index.html` as a file blocks the font loading for image export):
+
+```
+python3 -m http.server
+```
+
+Fonts: Rubik and Roboto Condensed (SIL Open Font License), subset to Latin.
