@@ -571,8 +571,10 @@ function render(view) {
   text(lg_, bm, by + 1, "%", { "text-anchor": "middle", fill: "var(--ink)", "font-size": 17, "font-weight": 700 });
   text(lg_, bm, by + 42, `Probabilities are based on ${N_SIMS.toLocaleString("en-US")} simulations`, { "text-anchor": "middle", fill: "var(--ink-soft)", "font-size": 15 });
   text(lg_, bm, by + 62, "of the rest of the regular season", { "text-anchor": "middle", fill: "var(--ink-soft)", "font-size": 15 });
-  const key = text(lg_, bm, by + 88, "", { "text-anchor": "middle", fill: "var(--ink-soft)", "font-size": 15 });
-  const keys = [["x", "clinched playoffs"]].concat(view.hasDiv ? [["y", "clinched division"]] : [], view.canEliminate ? [["e", "eliminated"]] : []);
+  // key only for letters that actually appear on the chart
+  const shown = new Set(rows.flatMap(t => [t.status, t.status_win, t.status_loss]));
+  const keys = [["x", "clinched playoffs"], ["y", "clinched division"], ["e", "eliminated"]].filter(([L]) => shown.has(L));
+  const key = keys.length ? text(lg_, bm, by + 88, "", { "text-anchor": "middle", fill: "var(--ink-soft)", "font-size": 15 }) : null;
   keys.forEach(([L, words], k) => {
     const b = el("tspan", { "font-weight": 700, fill: "var(--ink)" }, key); b.textContent = (k ? "  ·  " : "") + L;
     key.appendChild(document.createTextNode(" " + words));
