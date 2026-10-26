@@ -18,11 +18,12 @@ The last username, league and rules are also remembered in your browser (`localS
 ## ESPN leagues
 
 - **Public leagues** load for anyone.
-- **Private leagues** load only for someone signed in to ESPN in the same browser, and only if that
-  browser lets other sites use ESPN's sign-in (many block it). ESPN accepts sign-in only as cookies,
-  and a web page can't attach another site's cookies, so there's no way to paste a token into the page.
-  The dependable option is for the league manager to turn on **Make league viewable to public**
-  in ESPN's league settings.
+- **Private leagues** load through your own ESPN sign-in, with no token or server:
+  the page links to the league's data on ESPN, you copy that page (while signed in to ESPN)
+  and paste it back into the chart page. The data stays in that browser tab only, so share the
+  chart as a PNG. Repeat the steps to refresh the numbers.
+  (A pasted token can't work from a static site: ESPN accepts sign-in only as cookies, and a web page
+  can't attach another site's cookies.)
 - Projections: ESPN's weekly projection for the current week, then each player's season projection
   per game for later weeks. Both come from ESPN already scored for the league.
 

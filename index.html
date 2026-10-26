@@ -83,6 +83,13 @@ input:focus-visible, button:focus-visible, summary:focus-visible, .row:focus-vis
 .tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .status { color: var(--ink-soft); font-size: .92rem; }
 
+.paste { border: 1.5px solid var(--edge); border-radius: 8px; padding: 10px 14px; display: grid; gap: 8px; }
+.paste p, .paste ol { margin: 0; }
+.paste ol { padding-left: 1.4em; display: grid; gap: 2px; }
+.paste a { color: var(--win); font-weight: 700; }
+.paste textarea { width: 100%; font: .85rem/1.3 ui-monospace, Menlo, Consolas, monospace; color: var(--ink); background: var(--chip); border: 1.5px solid var(--edge); border-radius: 6px; padding: 8px; resize: vertical; }
+.paste .hint { color: var(--ink-soft); font-size: .88rem; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 details.rules { border: 1.5px solid var(--edge); border-radius: 8px; padding: 10px 14px; }
 details.rules summary { cursor: pointer; font-weight: 700; }
 details.rules summary span { font-weight: 400; color: var(--ink-soft); }
@@ -135,6 +142,21 @@ footer p { margin: 0; }
     <button class="btn" type="submit">Add ESPN league</button>
     <span class="status" id="espn-status" aria-live="polite"></span>
   </form>
+  <section class="paste" id="espn-paste" hidden>
+    <p><b>This ESPN league is private.</b> Load it through your own ESPN sign-in:</p>
+    <ol>
+      <li><a id="espn-data-link" href="#" target="_blank" rel="noopener">Open your league's data on ESPN</a> (you need to be signed in to ESPN).</li>
+      <li>On that page, select everything (Ctrl+A, or ⌘A on a Mac) and copy it.</li>
+      <li>Paste it here and load it.</li>
+    </ol>
+    <label for="espn-json" class="sr">League data from ESPN</label>
+    <textarea id="espn-json" rows="4" spellcheck="false" placeholder="Paste the league data here"></textarea>
+    <div class="tools">
+      <button class="btn" type="button" id="espn-json-load">Load league</button>
+      <span class="status" id="espn-json-status" aria-live="polite"></span>
+    </div>
+    <p class="hint">The data stays in this browser tab. To refresh the numbers later, repeat these steps. Share the chart as a PNG, because a share link can't carry a private league's data.</p>
+  </section>
 
   <div class="leagues" id="leagues" role="group" aria-label="League"></div>
 
@@ -386,20 +408,23 @@ async function loadSleeper(entry, onStep) {
 }
 
 // ESPN: public leagues load for anyone; private ones only with the viewer's own ESPN sign-in
-const PRIVATE_ESPN = "This ESPN league is private. Sign in to ESPN in this browser and try again, " +
-  "or have the league manager turn on \"Make league viewable to public\" in ESPN's league settings. " +
-  "Some browsers block ESPN's sign-in on other sites; if signing in doesn't help, the league needs to be public.";
+const PRIVATE_ESPN = "This ESPN league is private. Use the steps below to load it through your ESPN sign-in.";
+const pastedESPN = new Map();  // league id -> league data pasted from ESPN (this tab only)
 function espnSeason() { const n = new Date(); return n.getMonth() < 2 ? n.getFullYear() - 1 : n.getFullYear(); }
 function parseEspnId(text) {
   const m = /leagueId=(\d+)/i.exec(text) || /^\s*(\d{3,})\s*$/.exec(text);
   return m ? m[1] : null;
 }
-async function espnLeague(id, season) {
+function espnDataURL(id, season) {
   const views = ["mSettings", "mTeam", "mMatchup", "mRoster", "mStatus"].map(v => "view=" + v).join("&");
+  return `${ESPN}/seasons/${season}/segments/0/leagues/${id}?${views}`;
+}
+class PrivateLeague extends Error {}
+async function espnLeague(id, season) {
   let r;
-  try { r = await fetch(`${ESPN}/seasons/${season}/segments/0/leagues/${id}?${views}`, { credentials: "include" }); }
+  try { r = await fetch(espnDataURL(id, season), { credentials: "include" }); }
   catch (e) { throw new Error("Couldn't reach ESPN. Check your connection and try again."); }
-  if (r.status === 401) throw new Error(PRIVATE_ESPN);
+  if (r.status === 401) throw new PrivateLeague(PRIVATE_ESPN);
   if (r.status === 404) throw new Error(`ESPN has no league ${id} for the ${season} season.`);
   if (!r.ok) throw new Error(`ESPN returned ${r.status} for league ${id}.`);
   return r.json();
@@ -736,7 +761,20 @@ function setPlotMessage(msg) {
 
 // league list: this Sleeper user's leagues, then saved ESPN leagues
 let sleeperEntries = [];
-function espnEntries() { return (store.get("espn-leagues") || []).map(e => Object.assign({ provider: "espn", key: "espn-" + e.id, season: espnSeason() }, e)); }
+function espnEntries() {
+  return (store.get("espn-leagues") || []).map(e => Object.assign({ provider: "espn", key: "espn-" + e.id, season: espnSeason(), raw: pastedESPN.get(e.id) }, e));
+}
+function showPaste(id) {
+  $("espn-paste").hidden = false;
+  $("espn-paste").dataset.id = id;
+  $("espn-data-link").href = espnDataURL(id, espnSeason());
+  $("espn-json").value = ""; $("espn-json-status").textContent = "";
+}
+function saveESPN(id, raw) {
+  const saved = (store.get("espn-leagues") || []).filter(l => l.id !== id);
+  saved.push({ id, name: raw.settings.name, size: raw.teams.length });
+  store.set("espn-leagues", saved);
+}
 function drawLeagueButtons() {
   S.leagues = sleeperEntries.concat(espnEntries());
   const box = $("leagues"); box.innerHTML = "";
@@ -792,16 +830,18 @@ async function loadUser(name) {
 async function addESPN(text, quiet) {
   const id = parseEspnId(text), status = $("espn-status");
   if (!id) { status.textContent = "Paste an ESPN league link or the number after leagueId=."; return; }
-  const saved = store.get("espn-leagues") || [];
   let entry = espnEntries().find(e => e.id === id);
   if (!entry) {
     status.textContent = "Finding league…";
     let raw;
     try { raw = await espnLeague(id, espnSeason()); }
-    catch (e) { status.textContent = e.message; return; }
-    status.textContent = "";
-    saved.push({ id, name: raw.settings.name, size: raw.teams.length });
-    store.set("espn-leagues", saved);
+    catch (e) {
+      status.textContent = e.message;
+      if (e instanceof PrivateLeague) showPaste(id);
+      return;
+    }
+    status.textContent = ""; $("espn-paste").hidden = true;
+    saveESPN(id, raw);
     entry = Object.assign(espnEntries().find(e => e.id === id), { raw });
     leagueCache.delete(entry.key);
     $("espn-id").value = "";
@@ -819,7 +859,12 @@ async function selectLeague(entry) {
   setPlotMessage("Loading…");
   let d;
   try { d = await loadLeague(entry, msg => { if (run === S.run) setPlotMessage(msg); }); }
-  catch (e) { if (run === S.run) setPlotMessage("Couldn't load this league. " + e.message); return; }
+  catch (e) {
+    if (run !== S.run) return;
+    setPlotMessage("Couldn't load this league. " + e.message);
+    if (e instanceof PrivateLeague) showPaste(entry.id);
+    return;
+  }
   if (run !== S.run) return;
   S.data = d;
   if (d.levWeek >= d.poStart) { setPlotMessage("This league's regular season is over."); return; }
@@ -1030,6 +1075,21 @@ $("plot").addEventListener("scroll", hideTip, { passive: true });
 
 $("who").addEventListener("submit", e => { e.preventDefault(); loadUser($("username").value); });
 $("espn-form").addEventListener("submit", e => { e.preventDefault(); addESPN($("espn-id").value); });
+$("espn-json-load").addEventListener("click", () => {
+  const id = $("espn-paste").dataset.id, st = $("espn-json-status");
+  let raw;
+  try { raw = JSON.parse($("espn-json").value); }
+  catch (e) { st.textContent = "That isn't the league data. Copy everything on the ESPN page and paste it again."; return; }
+  if (raw && raw.messages) { st.textContent = "ESPN says: " + raw.messages.join(" ") + " Sign in to ESPN, reopen the link, and copy again."; return; }
+  if (!raw || !raw.settings || !raw.teams || !raw.schedule) { st.textContent = "That doesn't look like ESPN league data. Use the link above and copy the whole page."; return; }
+  if (String(raw.id) !== String(id)) { st.textContent = `That data is for league ${raw.id}, not ${id}.`; return; }
+  pastedESPN.set(id, raw);
+  saveESPN(id, raw);
+  leagueCache.delete("espn-" + id);
+  $("espn-paste").hidden = true; $("espn-status").textContent = ""; $("espn-id").value = "";
+  drawLeagueButtons();
+  selectLeague(espnEntries().find(e => e.id === id));
+});
 drawLeagueButtons();
 (async () => {
   if (params.get("espn")) await addESPN(params.get("espn"), true);
