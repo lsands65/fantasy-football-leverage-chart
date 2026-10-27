@@ -220,6 +220,15 @@ function playerKey(name, pos, team) {
 }
 const N_SIMS = 50000;
 const SHRINK_WEEKS = 3;   // history fallback: pull each team's average toward the league average
+// How far a player's actual points land from his projection: sd = a + b * projection, by position.
+// Fit on 2026 weeks 1-7, every Sleeper starter in three leagues (about 3,100 player-weeks); summed
+// over real lineups it reproduces team-level misses (z-score spread 0.93-1.00). Kickers weren't
+// in that data, so theirs is a flat assumption.
+const PLAYER_SD = { QB: [6.13, .085], RB: [3.39, .292], WR: [2.55, .428], TE: [4.23, .277], DEF: [4.32, .166], K: [4.5, 0] };
+// Residual correlations between players in the same NFL game, from fantasy-bro (correlate.py),
+// fitted over 2022-25: teammates (SAME_TEAM) and players on opposite sides (OPPOSING).
+const SAME_TEAM = { "QB|WR": .303, "QB|TE": .291, "QB|RB": .037 };
+const OPPOSING = { "QB|QB": .161, "QB|WR": .082, "QB|TE": .081, "TE|WR": .064, "WR|WR": .060, "RB|TE": .049, "RB|RB": -.043 };
 const NS = "http://www.w3.org/2000/svg";
 const FALLBACK = ["#2b4c7e", "#b23a48", "#3a7d44", "#6a4c93", "#d17a22", "#1f7a8c", "#8c5e3c", "#c0392b", "#46607a", "#7a8b2b"];
 const SLOTS = { QB: ["QB"], RB: ["RB"], WR: ["WR"], TE: ["TE"], K: ["K"], DEF: ["DEF"],
@@ -308,21 +317,63 @@ function sleeperPool(players, proj, week, firstWeek, scoring) {
     if (!x || !x.stats) continue;  // bye week or no projection
     const inj = x.player && x.player.injury_status;
     if ((week === firstWeek && OUT_NOW.has(inj)) || (week < firstWeek + 3 && OUT_LONG.has(inj))) continue;
-    pool.push([fantasyPoints(x.stats, scoring), x.player.position]);
+    pool.push([fantasyPoints(x.stats, scoring), x.player.position, x.team, x.opponent]);
   }
   return pool;
 }
 // highest projected score a roster can field: fill strict slots first, then flexes
 function bestLineup(pool, slots) {
   pool = [...pool].sort((a, b) => b[0] - a[0]);
-  const used = new Array(pool.length).fill(false);
+  const used = new Array(pool.length).fill(false), picks = [];
   let total = 0;
   for (const slot of [...slots].sort((a, b) => SLOTS[a].length - SLOTS[b].length)) {
     for (let j = 0; j < pool.length; j++) {
-      if (!used[j] && SLOTS[slot].includes(pool[j][1])) { used[j] = true; total += Math.max(pool[j][0], 0); break; }
+      if (!used[j] && SLOTS[slot].includes(pool[j][1])) { used[j] = true; picks.push(pool[j]); total += Math.max(pool[j][0], 0); break; }
     }
   }
-  return total;
+  return { total, picks };
+}
+
+// One week's joint distribution of every fantasy team's score. Each starter varies around his
+// projection (PLAYER_SD) and players in the same NFL game move together (SAME_TEAM / OPPOSING),
+// so a team's total is a sum of correlated player scores. That sum is drawn directly: covariance
+// across fantasy teams (opponents can start players from the same game), then its Cholesky factor.
+function playerSD(pos, m) { const c = PLAYER_SD[pos] || [3, .3]; return c[0] + c[1] * Math.max(m, 0); }
+function pairRho(a, b) {
+  if (!a[2] || !b[2]) return 0;
+  const k = a[1] <= b[1] ? `${a[1]}|${b[1]}` : `${b[1]}|${a[1]}`;
+  if (a[2] === b[2]) return SAME_TEAM[k] || 0;
+  if (a[3] === b[2]) return OPPOSING[k] || 0;
+  return 0;
+}
+function weekCholesky(lineups) {
+  const T = lineups.length, C = new Float64Array(T * T), games = new Map();
+  lineups.forEach((l, t) => {
+    C[t * T + t] += 1;  // a one-point floor keeps every team's spread positive
+    for (const p of l.picks) {
+      const sd = playerSD(p[1], p[0]);
+      C[t * T + t] += sd * sd;
+      if (!p[2]) continue;
+      const g = [p[2], p[3] || ""].sort().join("@");
+      if (!games.has(g)) games.set(g, []);
+      games.get(g).push([t, p, sd]);
+    }
+  });
+  for (const ps of games.values()) for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) {
+    const c = pairRho(ps[i][1], ps[j][1]) * ps[i][2] * ps[j][2];
+    if (!c) continue;
+    C[ps[i][0] * T + ps[j][0]] += c; C[ps[j][0] * T + ps[i][0]] += c;
+  }
+  for (let jitter = 0; ; jitter = jitter ? jitter * 10 : 1e-6) {
+    const L = new Float64Array(T * T); let ok = true;
+    for (let i = 0; i < T && ok; i++) for (let j = 0; j <= i; j++) {
+      let v = C[i * T + j] + (i === j ? jitter * C[i * T + i] : 0);
+      for (let k = 0; k < j; k++) v -= L[i * T + k] * L[j * T + k];
+      if (i === j) { if (v <= 0) { ok = false; break; } L[i * T + i] = Math.sqrt(v); }
+      else L[i * T + j] = v / L[j * T + j];
+    }
+    if (ok) return L;
+  }
 }
 
 // ---------- league data ----------
@@ -333,15 +384,17 @@ function spread(hist, T) {
   for (const h of hist) { const m = h.reduce((a, b) => a + b, 0) / (h.length || 1); for (const v of h) { ss += (v - m) ** 2; all += v; } cnt += Math.max(h.length - 1, 0); }
   return { ss, cnt, mean: all / (hist.reduce((a, h) => a + h.length, 0) || 1) };
 }
-function finish(d, hist, mu, model) {
+function finish(d, hist, lineups, model) {
   const { ss, cnt, mean } = spread(hist, d.T);
+  let mu = null, chol = null;
+  if (lineups) { mu = lineups.map(wk => wk.map(l => l.total)); chol = lineups.map(weekCholesky); }
   if (!mu) {
     if (!d.done) throw new Error("No projections available and no games played yet, so there's nothing to simulate.");
     const teamMu = hist.map(h => (h.reduce((a, b) => a + b, 0) + SHRINK_WEEKS * mean) / (d.done + SHRINK_WEEKS));
     mu = d.pairs.map(() => teamMu); model = "history";
   }
   const avgMu = mu.flat().reduce((a, b) => a + b, 0) / (mu.length * d.T || 1);
-  return Object.assign(d, { mu, model, sd: cnt > d.T ? Math.sqrt(ss / cnt) : 0.2 * (avgMu || 100) });
+  return Object.assign(d, { mu, chol, model, sd: cnt > d.T ? Math.sqrt(ss / cnt) : 0.2 * (avgMu || 100) });
 }
 async function withPictures(rawTeams, onStep) {
   onStep("Loading team pictures…");
@@ -514,6 +567,8 @@ async function loadESPN(entry, onStep) {
         const inj = x.player && x.player.injury_status;
         if ((w === levWeek && (ir || OUT_NOW.has(inj) || OUT_LONG.has(inj))) || (w < levWeek + 3 && (ir || OUT_LONG.has(inj)))) continue;
         pts = pos === "DEF" ? (x.stats.pts_std || 0) : fantasyPoints(x.stats, scoring);
+        if (pts) out.push([pts, pos, x.team, x.opponent]);
+        continue;
       } else {
         // no Sleeper match: ESPN's own projection (this week's, else season projection per game)
         if ((teamsInfo.get(p.proTeamId) || {}).bye === w) continue;
@@ -523,14 +578,14 @@ async function loadESPN(entry, onStep) {
         const yr = st.find(x => x.seasonId === season && x.scoringPeriodId === 0 && x.statSourceId === 1 && x.statSplitTypeId === 0);
         pts = wk ? wk.appliedTotal : yr ? yr.appliedTotal / 17 : 0;
       }
-      if (pts) out.push([pts, pos]);
+      if (pts) out.push([pts, pos, null, null]);  // unmatched: no NFL game known, so drawn independently
     }
     return out;
   };
   let mu = future.map((w, wi) => raw.teams.map(t => bestLineup(pool(t, w, wi), slots)));
   d.projSource = sleeperWeeks && matched ? "Sleeper" : "ESPN";
   d.matched = [matched, total];
-  if (!mu.flat().some(v => v > 0)) mu = null;  // roster data hidden: fall back to scoring history
+  if (!mu.flat().some(l => l.total > 0)) mu = null;  // roster data hidden: fall back to scoring history
 
   const members = new Map((raw.members || []).map(m => [m.id, m]));
   const nDiv = (ss.divisions || []).length;
@@ -564,7 +619,8 @@ function rng(seed) {  // mulberry32
     t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
 }
 async function simulate(d, rules, onProgress) {
-  const { T, pairs, mu, sd, median, teams } = d, W = pairs.length;
+  const { T, pairs, mu, chol, sd, median, teams } = d, W = pairs.length;
+  const z = new Float64Array(T);
   const divs = teams.map(t => t.division), divList = divisionsOf(d);
   const useDiv = rules.div > 0 && divList.length > 1;
   const members = divList.map(v => divs.map((x, i) => x === v ? i : -1).filter(i => i >= 0));
@@ -586,7 +642,15 @@ async function simulate(d, rules, onProgress) {
     for (let s = s0; s < Math.min(s0 + CHUNK, N_SIMS); s++) {
       for (let i = 0; i < T; i++) { wins[i] = rec[i]; pts[i] = teams[i].pf; }
       for (let w = 0; w < W; w++) {
-        for (let i = 0; i < T; i++) { sc[i] = mu[w][i] + sd * normal(); pts[i] += sc[i]; }
+        if (chol) {
+          const L = chol[w];
+          for (let i = 0; i < T; i++) z[i] = normal();
+          for (let i = 0; i < T; i++) {
+            let v = mu[w][i];
+            for (let k = 0, o = i * T; k <= i; k++) v += L[o + k] * z[k];
+            sc[i] = v; pts[i] += v;
+          }
+        } else for (let i = 0; i < T; i++) { sc[i] = mu[w][i] + sd * normal(); pts[i] += sc[i]; }
         for (const [a, b] of pairs[w]) {
           const aw = sc[a] > sc[b];
           wins[aw ? a : b] += 1;
@@ -984,7 +1048,9 @@ function draw() {
     ? `Each team's expected score every week is the best lineup its current roster can field, using ${v.projSource}'s weekly player projections in this league's scoring. ` +
       (v.provider === "ESPN" && v.projSource === "Sleeper" ? `Players are matched from ESPN to Sleeper by name, position and team (${v.matched[0]} of ${v.matched[1]} rostered players); defenses use Sleeper's standard defense points, and anyone unmatched uses ESPN's projection. ` : "") +
       (v.projSource === "ESPN" ? "ESPN only projects the current week, so later weeks use each player's season projection per game. " : "") +
-      "Players on bye or ruled out are left out. "
+      "Players on bye or ruled out are left out. " +
+      "In each simulated week every starter scores around his projection, by a spread that grows with the projection (measured on this season's results), " +
+      "and players in the same NFL game move together: a quarterback with his own receivers, and both sides of a shootout (correlations from fantasy-bro). "
     : `${v.provider} projections weren't available, so each team's weekly score is drawn from its scoring average so far, pulled toward the league average. `;
   $("foot").innerHTML = `<p>${model}${v.median ? "Every week also counts a win or loss against the league median. " : ""}` +
     `Playoff spots: <span data-rules></span>. Records tie-break on points for. ` +

@@ -33,7 +33,13 @@ The last username, league and rules are also remembered in your browser (`localS
 - Each team's expected score each remaining week is the best lineup its current roster can field,
   using the platform's player projections scored with the league's own settings.
   Players on bye or ruled out are left out.
-- Week-to-week spread comes from how much each team's scores have varied this season.
+- Every starter scores around his projection by a spread that grows with the projection
+  (sd = a + b × projection, by position), fit on this season's actual-vs-projected results.
+  Summed over real lineups it reproduces how far team scores land from their projections.
+- Players in the same NFL game move together, using the residual correlations measured in
+  [fantasy-bro](https://github.com/lsands65/fantasy-bro): a quarterback with his own receivers and
+  tight end, and both sides of a shootout. That includes two fantasy opponents starting players
+  from the same game. Each week's team scores are drawn jointly from those correlated players.
 - 50,000 simulated seasons. Leagues with a median game count it every week.
 - Playoff spots are filled in order: top teams in each division, then best remaining records
   (ties broken by points for), then most remaining points for.
