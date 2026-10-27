@@ -676,9 +676,9 @@ async function compute(d, rules, onProgress) {
 }
 
 // ---------- chart ----------
+// Never 0% or 100%: a simulated 0 isn't elimination (and 100 isn't a clinch). Only the
+// x / y / e letters, which are mathematically certain, stand in for those.
 function pct(p) {
-  if (p >= 1) return "100%";
-  if (p <= 0) return "0%";
   if (p < .005) return "<1%";
   if (p >= .995) return ">99%";
   return Math.round(p * 100) + "%";
