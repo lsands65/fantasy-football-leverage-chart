@@ -1649,14 +1649,16 @@ function raceCommentary(prev, cur, week, final) {
   return bits.join(" ");
 }
 
-// The track is an oval run counterclockwise, one lap for the regular season. Lane j has its own
-// stadium-shaped path; a horse's place is a fraction of the lap, measured from the start/finish line
-// on the home stretch, so every lane is fair.
+// The track is an oval run counterclockwise, one lap for the regular season. A horse's place is a
+// fraction of the lap from the start/finish line on the home stretch; its "lane" is just how far out
+// from the rail it runs, which changes as it races (see racingLines). Progress is counted as a fraction
+// of the lap whatever the line, so running wide costs nothing here.
 const RACE = { MIN_PACE: .35, CAP: .985, PAST: 1.025 };
-function raceGeometry(n) {
-  const laneW = n > 16 ? 9 : 16, R0 = n > 16 ? 70 : 95, Rout = R0 + n * laneW;
+function raceGeometry(teams) {
+  // track width in horse-widths: room to pass, not a lane per horse
+  const n = Math.min(teams, teams > 16 ? 12 : 7), laneW = teams > 16 ? 13 : 18, R0 = teams > 16 ? 120 : 110, Rout = R0 + n * laneW;
   const W = 1000, cy = Rout + 18, Ls = W - 2 * Rout - 40, cx = W / 2;
-  return { n, laneW, R0, Rout, W, H: 2 * Rout + 36, cx, cy, Ls, s0: Ls * .7 };
+  return { n, teams, laneW, R0, Rout, W, H: 2 * Rout + 36, cx, cy, Ls, s0: Ls * .7 };
 }
 // point and heading at lap fraction `frac` in lane `j`
 function lanePoint(G, j, frac) {
@@ -1682,12 +1684,15 @@ function raceDraw(now) {
   const f = nF === 1 ? 1 : Math.min(1, local / STEP_MS), ease = f < .5 ? 2 * f * f : 1 - (-2 * f + 2) ** 2 / 2;
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const svg = $("race-track").querySelector("svg"), kb = nF === 1 ? 0 : k + 1, shown = f >= 1 ? kb : k;
-  const size = G.laneW * (G.n > 16 ? 2.2 : 1.9);
+  const size = G.laneW * (G.teams > 16 ? 1.6 : 1.7);
   rows.forEach((r, i) => {
     const a = race.pos[k][i], b = race.pos[kb][i], frac = nF === 1 ? a : a + (b - a) * ease;
     const v = nF === 1 ? frames[k][i] : frames[k][i] + (frames[kb][i] - frames[k][i]) * ease;
     const moving = f < 1 && nF > 1, speed = moving ? (b - a) * (nF - 1) : 0;
-    const p = lanePoint(G, race.lane[i], frac);
+    // drift between this week's racing line and next week's, with a slight weave while running
+    const la = race.line[k][i], lb = race.line[kb][i];
+    const line = (nF === 1 ? la : la + (lb - la) * ease) + (moving && !reduce ? Math.sin(now / 900 + i * 1.7) * .18 : 0);
+    const p = lanePoint(G, Math.max(0, Math.min(G.n - 1, line)), frac);
     const bob = reduce || !moving ? 0 : Math.sin(now / (75 - Math.min(45, speed * 60)) + i) * (1 + speed * 2.5);
     // the emoji faces left; flip it when heading right, and keep it upright through the turns
     const rightish = Math.cos(p.a * Math.PI / 180) >= 0;
@@ -1737,17 +1742,18 @@ function raceTrack(rows) {
   const svg = el("svg", { viewBox: `0 0 ${G.W} ${G.H}`, role: "img", "aria-label": "Playoff race around an oval track" });
   el("path", { d: stadiumPath(G, G.Rout + 6), fill: "var(--rail)", "fill-opacity": .9 }, svg);
   el("path", { d: stadiumPath(G, G.Rout), fill: "var(--turf)" }, svg);
-  for (let j = 1; j < G.n; j++) el("path", { d: stadiumPath(G, G.R0 + j * G.laneW), fill: "none", stroke: "var(--rail)", "stroke-opacity": .25, "stroke-dasharray": "5 7" }, svg);
+  // no painted lanes: a faint harrow pattern in the dirt instead
+  for (let j = 1; j < G.n; j += 2) el("path", { d: stadiumPath(G, G.R0 + j * G.laneW), fill: "none", stroke: "var(--rail)", "stroke-opacity": .07 }, svg);
   el("path", { d: stadiumPath(G, G.R0), fill: "var(--turf-dark)", stroke: "var(--rail)", "stroke-width": 3 }, svg);
   // infield sign
-  text(svg, G.cx, G.cy - 8, "THE PLAYOFF STAKES", { "text-anchor": "middle", fill: "var(--rail)", "font-size": G.n > 16 ? 22 : 28, "font-weight": 800, style: "font-family: Rubik, 'Arial Black', sans-serif", "letter-spacing": ".04em" });
+  text(svg, G.cx, G.cy - 8, "THE PLAYOFF STAKES", { "text-anchor": "middle", fill: "var(--rail)", "font-size": 28, "font-weight": 800, style: "font-family: Rubik, 'Arial Black', sans-serif", "letter-spacing": ".04em" });
   text(svg, G.cx, G.cy + 22, `${S.view.spots} spots · one lap = the regular season`, { "text-anchor": "middle", fill: "var(--rail)", "fill-opacity": .8, "font-size": 15 });
   // start/finish line across the home stretch
   const x0 = G.cx - G.Ls / 2 + G.s0, top = G.cy + G.R0, sq = 6;
   for (let y = top, r = 0; y < G.cy + G.Rout; y += sq, r++) for (let c = 0; c < 2; c++)
     el("rect", { x: x0 - sq + c * sq, y, width: sq, height: Math.min(sq, G.cy + G.Rout - y), fill: (r + c) % 2 ? "#fff" : "#111" }, svg);
   text(svg, x0, G.cy + G.Rout + 14, "START / FINISH", { "text-anchor": "middle", fill: "var(--ink)", "font-size": 12, "font-weight": 700 });
-  const size = G.laneW * (G.n > 16 ? 2.2 : 1.9);
+  const size = G.laneW * (G.teams > 16 ? 1.6 : 1.7);
   rows.forEach((r, i) => {
     const g = el("g", { "data-h": i }, svg);
     el("title", {}, g);
@@ -1761,6 +1767,22 @@ function raceTrack(rows) {
     if (r.avatar) el("image", { href: r.avatar, x: -size * .08 - sr, y: -size * .3 - sr, width: sr * 2, height: sr * 2, "clip-path": `url(#${cid})`, preserveAspectRatio: "xMidYMid slice" }, rider);
   });
   return svg;
+}
+// Where each horse runs across the track after each week. At the gate they stand in post positions;
+// after that, placed from the leader back, each takes the spot nearest the rail that isn't blocked by
+// a horse just ahead or alongside, so a horse in traffic swings wide to pass and tucks back in when clear.
+function racingLines(pos, n, width) {
+  const GAP = .03;  // about a length and a half, as a fraction of the lap
+  return pos.map((P, fi) => {
+    if (fi === 0) return P.map((_, i) => n > 1 ? i * (width - 1) / (n - 1) : 0);  // the gate, rail to outside
+    const L = new Array(n), placed = [];
+    for (const i of P.map((_, i) => i).sort((a, b) => P[b] - P[a])) {
+      let lane = 0;
+      while (lane < width - 1 && placed.some(j => Math.abs(L[j] - lane) < .9 && Math.abs(P[j] - P[i]) < GAP)) lane += 1;
+      L[i] = lane; placed.push(i);
+    }
+    return L;
+  });
 }
 async function openRace() {
   const sec = $("race"), key = `${S.league.key}|${rulesToParam(S.rules)}`;
@@ -1779,7 +1801,7 @@ async function openRace() {
   race.rows = order.map(i => byIdx[i]);
   race.frames = odds.map(f => order.map(i => f[i]));
   race.status = stats.map(f => order.map(i => f[i]));
-  race.lane = race.rows.map((r, i) => i);  // post positions: today's favourite on the rail
+
   // Horses never run backwards. Each week every horse runs at least a trot (even one that can't win
   // still runs) plus a burst from its playoff odds; a stride is sized so 100% every week completes
   // the lap at season's end. Only a clinched horse crosses the finish line.
@@ -1793,6 +1815,7 @@ async function openRace() {
     return Math.min(RACE.CAP, prev + pace * stride);
   })));
   $("race-track").appendChild(raceTrack(race.rows));
+  race.line = racingLines(race.pos, race.rows.length, race.G.n);
   $("race-note").textContent = `One lap is the regular season, and everyone starts at the gate. Each week every horse runs at least a trot, plus a burst from its playoff odds that week (its pace in the running order), ` +
     `so a horse slows down when its odds drop but never runs backwards, and even a long shot keeps running. Only a horse that has clinched crosses the finish line. ` +
     `Past weeks are replayed from the standings at the time with ${RACE_SIMS.toLocaleString("en-US")} simulations each, using today's rosters with that week's projections, so early weeks are a close reconstruction.`;
