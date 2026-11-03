@@ -125,8 +125,18 @@ details.rules summary span { font-weight: 400; color: var(--ink-soft); }
 .race-head h2 { font-family: var(--display); font-weight: 800; font-size: clamp(1.4rem, 4vw, 2rem); margin: 0; }
 .race-week { font: 700 1.2rem/1 var(--label); color: var(--win); font-variant-numeric: tabular-nums; }
 .race-call { margin: 0; min-height: 2.8em; font-size: 1.05rem; line-height: 1.4; max-width: 75ch; }
-.race-track { overflow-x: auto; border-radius: 10px; }
-.race-track svg { display: block; width: 100%; min-width: 680px; height: auto; font-family: var(--label); }
+.race-body { display: grid; grid-template-columns: minmax(0, 1fr) 15rem; gap: 14px; align-items: start; }
+@media (max-width: 760px) { .race-body { grid-template-columns: minmax(0, 1fr); } }
+.race-track { overflow-x: auto; min-width: 0; }
+.race-track svg { display: block; width: 100%; min-width: 560px; height: auto; font-family: var(--label); }
+.race-board { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: pos; font-variant-numeric: tabular-nums; }
+.race-board li { display: grid; grid-template-columns: 1.6em 1.2em minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 3px 6px; border-radius: 4px; counter-increment: pos; font-size: .9rem; }
+.race-board li::before { content: counter(pos); color: var(--ink-soft); text-align: right; }
+.race-board li.won { background: color-mix(in srgb, var(--win) 14%, transparent); font-weight: 700; }
+.race-board li.out { opacity: .5; }
+.race-board .silk { width: 1.2em; height: 1.2em; border-radius: 50%; background-size: cover; background-position: center; border: 1px solid var(--edge); }
+.race-board .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.race-board .pc { color: var(--ink-soft); }
 .race .note { color: var(--ink-soft); font-size: .88rem; margin: 0; max-width: 75ch; }
 .details { border: 1.5px solid var(--edge); border-radius: 8px; padding: 12px 16px; display: grid; gap: 10px; background: var(--chip); }
 .details-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
@@ -229,7 +239,10 @@ footer p { margin: 0; }
       </div>
     </div>
     <p class="race-call" id="race-call" aria-live="polite"></p>
-    <div class="race-track" id="race-track"></div>
+    <div class="race-body">
+      <div class="race-track" id="race-track"></div>
+      <ol class="race-board" id="race-board" aria-label="Running order"></ol>
+    </div>
     <p class="note" id="race-note"></p>
   </section>
   <div class="plot" id="plot"><p class="empty">Enter a Sleeper username or an ESPN league to see playoff odds.</p></div>
@@ -1620,10 +1633,10 @@ function raceCommentary(prev, cur, week, final) {
   const out = rows.map((r, i) => i).filter(i => st[i] === "e" && was[i] !== "e");
   const calls = [];
   if (crossed.length) calls.push(`${crossed.map(name).join(" and ")} cross${crossed.length === 1 ? "es" : ""} the finish line, clinched!`);
-  if (out.length) calls.push(`${out.map(name).join(" and ")} ${out.length === 1 ? "is" : "are"} pulled up, eliminated.`);
+  if (out.length) calls.push(`${out.map(name).join(" and ")} ${out.length === 1 ? "is" : "are"} out of contention, but still running.`);
   if (week === 1) {
     const lead = moves[0];
-    return calls.concat(lead ? [`And they're off! ${name(lead[1])} breaks fastest to ${pct(cur[lead[1]])}.`] : []).join(" ");
+    return calls.concat(lead ? [`And they're off! ${name(lead[1])} breaks fastest at ${pct(cur[lead[1]])} pace.`] : []).join(" ");
   }
   if (!moves.length) return calls.join(" ") || "The field is settled.";
   const [up, ui] = moves[0], [down, di] = moves[moves.length - 1];
@@ -1635,35 +1648,83 @@ function raceCommentary(prev, cur, week, final) {
   bits.push(`${name(front)} ${final ? "is out in front of the chasing pack" : "leads the chasing pack"}.`);
   return bits.join(" ");
 }
+
+// The track is an oval run counterclockwise, one lap for the regular season. Lane j has its own
+// stadium-shaped path; a horse's place is a fraction of the lap, measured from the start/finish line
+// on the home stretch, so every lane is fair.
+const RACE = { MIN_PACE: .35, CAP: .985, PAST: 1.025 };
+function raceGeometry(n) {
+  const laneW = n > 16 ? 9 : 16, R0 = n > 16 ? 70 : 95, Rout = R0 + n * laneW;
+  const W = 1000, cy = Rout + 18, Ls = W - 2 * Rout - 40, cx = W / 2;
+  return { n, laneW, R0, Rout, W, H: 2 * Rout + 36, cx, cy, Ls, s0: Ls * .7 };
+}
+// point and heading at lap fraction `frac` in lane `j`
+function lanePoint(G, j, frac) {
+  const R = G.R0 + (j + .5) * G.laneW, L = 2 * G.Ls + 2 * Math.PI * R;
+  let d = ((G.s0 + frac * L) % L + L) % L;
+  const left = G.cx - G.Ls / 2, right = G.cx + G.Ls / 2;
+  if (d < G.Ls) return { x: left + d, y: G.cy + R, a: 0 };                     // home stretch, heading right
+  d -= G.Ls;
+  if (d < Math.PI * R) { const t = d / R; return { x: right + R * Math.sin(t), y: G.cy + R * Math.cos(t), a: -t * 180 / Math.PI }; }  // far turn
+  d -= Math.PI * R;
+  if (d < G.Ls) return { x: right - d, y: G.cy - R, a: 180 };                   // back stretch, heading left
+  d -= G.Ls;
+  const t = d / R; return { x: left - R * Math.sin(t), y: G.cy - R * Math.cos(t), a: 180 - t * 180 / Math.PI };  // club-house turn
+}
+function stadiumPath(G, R) {
+  const l = G.cx - G.Ls / 2, r = G.cx + G.Ls / 2, t = G.cy - R, b = G.cy + R;
+  return `M${l},${b} L${r},${b} A${R},${R} 0 0 0 ${r},${t} L${l},${t} A${R},${R} 0 0 0 ${l},${b} Z`;
+}
 function raceDraw(now) {
-  const rows = race.rows, frames = race.frames, nF = frames.length;
+  const rows = race.rows, frames = race.frames, nF = frames.length, G = race.G;
   const seg = STEP_MS + HOLD_MS, total = (nF - 1) * seg;
   const t = Math.min(race.t, total), k = Math.max(0, Math.min(nF - 2, Math.floor(t / seg))), local = t - k * seg;
   const f = nF === 1 ? 1 : Math.min(1, local / STEP_MS), ease = f < .5 ? 2 * f * f : 1 - (-2 * f + 2) ** 2 / 2;
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const svg = $("race-track").querySelector("svg"), LH = +svg.dataset.lane;
-  const posOf = (fi, i) => race.pos[fi][i];
-  const outAt = fi => i => race.status[fi][i] === "e";
+  const svg = $("race-track").querySelector("svg"), kb = nF === 1 ? 0 : k + 1, shown = f >= 1 ? kb : k;
+  const size = G.laneW * (G.n > 16 ? 2.2 : 1.9);
   rows.forEach((r, i) => {
-    const kb = nF === 1 ? 0 : k + 1, a = posOf(k, i), b = posOf(kb, i), x = nF === 1 ? a : a + (b - a) * ease;
+    const a = race.pos[k][i], b = race.pos[kb][i], frac = nF === 1 ? a : a + (b - a) * ease;
     const v = nF === 1 ? frames[k][i] : frames[k][i] + (frames[kb][i] - frames[k][i]) * ease;
+    const moving = f < 1 && nF > 1, speed = moving ? (b - a) * (nF - 1) : 0;
+    const p = lanePoint(G, race.lane[i], frac);
+    const bob = reduce || !moving ? 0 : Math.sin(now / (75 - Math.min(45, speed * 60)) + i) * (1 + speed * 2.5);
+    // the emoji faces left; flip it when heading right, and keep it upright through the turns
+    const rightish = Math.cos(p.a * Math.PI / 180) >= 0;
+    const turn = rightish ? `rotate(${p.a}) scale(-1 1)` : `rotate(${p.a - 180})`;
     const g = svg.querySelector(`[data-h="${i}"]`);
-    const out = outAt(f >= 1 ? kb : k)(i), done = race.status[f >= 1 ? kb : k][i];
-    const moving = f < 1 && nF > 1 && !outAt(k)(i), speed = moving ? Math.abs(b - a) / (RACE.FINISH - RACE.GATE) : 0;
-    // faster gallop (and a bigger bob) for teams whose odds are moving more this week
-    const bob = reduce || !moving ? 0 : Math.sin(now / (70 - Math.min(50, speed * 300)) + i) * (1.5 + speed * 14);
-    g.setAttribute("transform", `translate(${x} ${(i + .5) * LH + bob})`);
-    g.setAttribute("opacity", out ? .4 : 1);
-    g.querySelector(".pct").textContent = done === "e" ? "out" : done === "y" ? "y" : done === "x" ? "x" : (k === 0 && f < 1 && nF > 1 && x === RACE.GATE ? "" : pct(v));
-    g.querySelector(".dust").setAttribute("opacity", !reduce && moving && (b - a) / (RACE.FINISH - RACE.GATE) > .05 ? .9 : 0);
+    g.setAttribute("transform", `translate(${p.x} ${p.y + bob})`);
+    g.querySelector(".rider").setAttribute("transform", turn);
+    const st = race.status[shown][i];
+    g.setAttribute("opacity", st === "e" ? .45 : 1);
+    g.querySelector(".dust").setAttribute("opacity", !reduce && moving && speed > .6 ? .85 : 0);
+    g.querySelector(".dust").setAttribute("transform", `${turn} translate(${size * .95} 0)`);
+    g.querySelector("title").textContent = `${r.name}: ${st === "x" ? "clinched" : st === "y" ? "clinched division" : st === "e" ? "out" : pct(v) + " pace"}`;
   });
   const week = Math.min(nF - 1, k + (f >= 1 && nF > 1 ? 1 : 0));
   $("race-week").textContent = week === 0 ? "At the gate" : week === nF - 1 ? `After week ${week} (today)` : `After week ${week}`;
   if (race.calledFor !== week) {
     race.calledFor = week;
     $("race-call").textContent = raceCommentary(frames[Math.max(0, week - 1)], frames[week], week, week === nF - 1);
+    raceBoard(week);
   }
   return t >= total;
+}
+// running order beside the track: how far around, pace, and status
+function raceBoard(week) {
+  const rows = race.rows, ol = $("race-board");
+  const order = rows.map((r, i) => i).sort((a, b) => race.pos[week][b] - race.pos[week][a]);
+  ol.innerHTML = "";
+  for (const i of order) {
+    const li = document.createElement("li"), st = race.status[week][i];
+    li.className = st === "e" ? "out" : st ? "won" : "";
+    const dot = document.createElement("span"); dot.className = "silk"; dot.style.background = colorFor(rows[i], i);
+    if (rows[i].avatar) dot.style.backgroundImage = `url(${rows[i].avatar})`;
+    const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = rows[i].name;
+    const pc = document.createElement("span"); pc.className = "pc";
+    pc.textContent = st === "x" ? "x" : st === "y" ? "y" : st === "e" ? "out" : week === 0 ? "" : pct(race.frames[week][i]);
+    li.append(dot, nm, pc); ol.appendChild(li);
+  }
 }
 function raceLoop(now) {
   if (race.playing && race.last) race.t += now - race.last;
@@ -1671,45 +1732,40 @@ function raceLoop(now) {
   if (raceDraw(now) && race.playing) { race.playing = false; $("race-play").textContent = "Play"; }
   if (!$("race").hidden) race.raf = requestAnimationFrame(raceLoop);
 }
-const RACE = { GATE: 170, FINISH: 880 };
 function raceTrack(rows) {
-  const n = rows.length, LH = n > 16 ? 26 : 44, W = 1000, X0 = RACE.GATE, X1 = RACE.FINISH - 25, H = n * LH;
-  const svg = el("svg", { viewBox: `0 0 ${W} ${H + 30}`, role: "img", "aria-label": "Playoff odds after each week, drawn as a horse race" });
-  svg.dataset.lane = LH;
-  el("rect", { x: 0, y: 0, width: W, height: H, fill: "var(--turf)" }, svg);
-  for (let i = 0; i < n; i++) {
-    if (i % 2) el("rect", { x: 0, y: i * LH, width: W, height: LH, fill: "var(--turf-dark)" }, svg);
-    if (i) el("line", { x1: 0, x2: W, y1: i * LH, y2: i * LH, stroke: "var(--rail)", "stroke-opacity": .35, "stroke-dasharray": "6 8" }, svg);
-  }
-  // starting gate, odds marks along the track, and the finish line: crossing it means clinched
-  el("rect", { x: X0 - 34, y: 0, width: 8, height: H, fill: "var(--rail)", "fill-opacity": .8 }, svg);
-  text(svg, X0 - 30, H + 16, "GATE", { "text-anchor": "middle", fill: "var(--ink-soft)", "font-size": 13, "font-weight": 700 });
-  const weeks = Math.max(1, S.data.poStart - 1);  // one furlong post per week of a full-pace stride
-  for (let w = 1; w < weeks; w++) {
-    const x = X0 + w * (X1 - X0) / weeks;
-    el("line", { x1: x, x2: x, y1: 0, y2: H, stroke: "var(--rail)", "stroke-opacity": .18 }, svg);
-  }
-  const FX = RACE.FINISH;
-  for (let y = 0, r = 0; y < H; y += 6, r++) for (let c = 0; c < 2; c++) el("rect", { x: FX + c * 6, y, width: 6, height: 6, fill: (r + c) % 2 ? "#fff" : "#111" }, svg);
-  text(svg, FX + 6, H + 16, "CLINCHED", { "text-anchor": "middle", fill: "var(--ink)", "font-size": 13, "font-weight": 700 });
+  const G = race.G = raceGeometry(rows.length);
+  const svg = el("svg", { viewBox: `0 0 ${G.W} ${G.H}`, role: "img", "aria-label": "Playoff race around an oval track" });
+  el("path", { d: stadiumPath(G, G.Rout + 6), fill: "var(--rail)", "fill-opacity": .9 }, svg);
+  el("path", { d: stadiumPath(G, G.Rout), fill: "var(--turf)" }, svg);
+  for (let j = 1; j < G.n; j++) el("path", { d: stadiumPath(G, G.R0 + j * G.laneW), fill: "none", stroke: "var(--rail)", "stroke-opacity": .25, "stroke-dasharray": "5 7" }, svg);
+  el("path", { d: stadiumPath(G, G.R0), fill: "var(--turf-dark)", stroke: "var(--rail)", "stroke-width": 3 }, svg);
+  // infield sign
+  text(svg, G.cx, G.cy - 8, "THE PLAYOFF STAKES", { "text-anchor": "middle", fill: "var(--rail)", "font-size": G.n > 16 ? 22 : 28, "font-weight": 800, style: "font-family: Rubik, 'Arial Black', sans-serif", "letter-spacing": ".04em" });
+  text(svg, G.cx, G.cy + 22, `${S.view.spots} spots · one lap = the regular season`, { "text-anchor": "middle", fill: "var(--rail)", "fill-opacity": .8, "font-size": 15 });
+  // start/finish line across the home stretch
+  const x0 = G.cx - G.Ls / 2 + G.s0, top = G.cy + G.R0, sq = 6;
+  for (let y = top, r = 0; y < G.cy + G.Rout; y += sq, r++) for (let c = 0; c < 2; c++)
+    el("rect", { x: x0 - sq + c * sq, y, width: sq, height: Math.min(sq, G.cy + G.Rout - y), fill: (r + c) % 2 ? "#fff" : "#111" }, svg);
+  text(svg, x0, G.cy + G.Rout + 14, "START / FINISH", { "text-anchor": "middle", fill: "var(--ink)", "font-size": 12, "font-weight": 700 });
+  const size = G.laneW * (G.n > 16 ? 2.2 : 1.9);
   rows.forEach((r, i) => {
-    text(svg, 8, (i + .5) * LH, r.name.length > 20 ? r.name.slice(0, 19) + "…" : r.name, { fill: "var(--rail)", "font-size": LH > 30 ? 15 : 12, "font-weight": 700 });
-    const g = el("g", { "data-h": i }, svg), s = LH * .9;
-    el("text", { class: "dust", x: -s * 1.1, y: 2, "dominant-baseline": "central", "text-anchor": "middle", "font-size": s * .55, opacity: 0 }, g).textContent = "💨";
-    // the horse faces right; the team's picture rides as its silks
-    el("text", { x: 0, y: 0, "dominant-baseline": "central", "text-anchor": "middle", "font-size": s, transform: "scale(-1 1)" }, g).textContent = "🏇";
-    const cid = `silk${i}`, cp = el("clipPath", { id: cid }, svg);
-    el("circle", { cx: s * .1, cy: -s * .3, r: s * .2 }, cp);
-    el("circle", { cx: s * .1, cy: -s * .3, r: s * .22, fill: colorFor(r, i), stroke: "#fff", "stroke-width": 1.5 }, g);
-    if (r.avatar) el("image", { href: r.avatar, x: s * .1 - s * .2, y: -s * .3 - s * .2, width: s * .4, height: s * .4, "clip-path": `url(#${cid})`, preserveAspectRatio: "xMidYMid slice" }, g);
-    el("text", { class: "pct", x: s * .7, y: 1, "dominant-baseline": "central", fill: "#fff", "font-size": LH > 30 ? 15 : 12, "font-weight": 700, stroke: "rgba(0,0,0,.45)", "stroke-width": 3, "paint-order": "stroke" }, g);
+    const g = el("g", { "data-h": i }, svg);
+    el("title", {}, g);
+    const d = el("text", { class: "dust", x: 0, y: 0, "dominant-baseline": "central", "text-anchor": "middle", "font-size": size * .55, opacity: 0 }, g); d.textContent = "💨";
+    const rider = el("g", { class: "rider" }, g);
+    el("text", { x: 0, y: 0, "dominant-baseline": "central", "text-anchor": "middle", "font-size": size }, rider).textContent = "🏇";
+    // the team's picture rides as its silks
+    const cid = `silk${i}`, cp = el("clipPath", { id: cid }, svg), sr = size * .2;
+    el("circle", { cx: -size * .08, cy: -size * .3, r: sr }, cp);
+    el("circle", { cx: -size * .08, cy: -size * .3, r: sr * 1.12, fill: colorFor(r, i), stroke: "#fff", "stroke-width": 1.2 }, rider);
+    if (r.avatar) el("image", { href: r.avatar, x: -size * .08 - sr, y: -size * .3 - sr, width: sr * 2, height: sr * 2, "clip-path": `url(#${cid})`, preserveAspectRatio: "xMidYMid slice" }, rider);
   });
   return svg;
 }
 async function openRace() {
   const sec = $("race"), key = `${S.league.key}|${rulesToParam(S.rules)}`;
   sec.hidden = false; $("plot").hidden = true; $("details").hidden = true; $("tip").hidden = true;
-  $("race-track").innerHTML = ""; $("race-week").textContent = ""; $("race-note").textContent = "";
+  $("race-track").innerHTML = ""; $("race-board").innerHTML = ""; $("race-week").textContent = ""; $("race-note").textContent = "";
   cancelAnimationFrame(race.raf);
   try {
     if (!raceCache.has(key)) raceCache.set(key, await raceSeries(S.data, S.rules, msg => { $("race-call").textContent = msg; }));
@@ -1719,24 +1775,27 @@ async function openRace() {
   // frames: the gate, then after each week; the last week uses the chart's own numbers and letters
   const odds = [byIdx.map(() => 0), ...series.slice(0, -1), byIdx.map(r => r.now)];
   const stats = [byIdx.map(() => null), ...status.slice(0, -1), byIdx.map(r => r.status)];
-  const order = byIdx.map((r, i) => i).sort((a, b) => (stats.at(-1)[a] === "e") - (stats.at(-1)[b] === "e") || byIdx[b].now - byIdx[a].now);
+  const order = byIdx.map((r, i) => i).sort((a, b) => byIdx[b].now - byIdx[a].now);
   race.rows = order.map(i => byIdx[i]);
   race.frames = odds.map(f => order.map(i => f[i]));
   race.status = stats.map(f => order.map(i => f[i]));
-  // Horses never run backwards: each week a horse still running moves forward by its playoff odds
-  // that week (its pace), with a stride sized so 100% every week reaches the line at season's end.
-  // Clinching sends it across the finish line; elimination stops it where it is.
-  const stride = (RACE.FINISH - 25 - RACE.GATE) / Math.max(1, S.data.poStart - 1);
+  race.lane = race.rows.map((r, i) => i);  // post positions: today's favourite on the rail
+  // Horses never run backwards. Each week every horse runs at least a trot (even one that can't win
+  // still runs) plus a burst from its playoff odds; a stride is sized so 100% every week completes
+  // the lap at season's end. Only a clinched horse crosses the finish line.
+  const stride = 1 / Math.max(1, S.data.poStart - 1);
   race.pos = [];
   race.frames.forEach((f, fi) => race.pos.push(f.map((v, i) => {
-    const st = race.status[fi][i], prev = fi ? race.pos[fi - 1][i] : RACE.GATE;
-    if (st === "x" || st === "y") return RACE.FINISH + 38;
-    if (fi && race.status[fi - 1][i] === "e") return prev;
-    return fi ? Math.min(RACE.FINISH - 25, prev + v * stride) : RACE.GATE;
+    const st = race.status[fi][i], prev = fi ? race.pos[fi - 1][i] : 0;
+    if (st === "x" || st === "y") return Math.max(prev, RACE.PAST);
+    if (!fi) return 0;
+    const pace = st === "e" ? RACE.MIN_PACE : RACE.MIN_PACE + (1 - RACE.MIN_PACE) * v;
+    return Math.min(RACE.CAP, prev + pace * stride);
   })));
   $("race-track").appendChild(raceTrack(race.rows));
-  $("race-note").textContent = `Everyone starts at the gate. Each week a horse moves forward by its playoff odds that week (the number beside it is its pace), so it slows down when its odds drop but never runs backwards. It crosses the finish line only once it has clinched, and an eliminated horse pulls up. Past weeks are replayed from the standings at the time ` +
-    `with ${RACE_SIMS.toLocaleString("en-US")} simulations each, using today's rosters with that week's projections, so early weeks are a close reconstruction rather than exactly what the chart said then.`;
+  $("race-note").textContent = `One lap is the regular season, and everyone starts at the gate. Each week every horse runs at least a trot, plus a burst from its playoff odds that week (its pace in the running order), ` +
+    `so a horse slows down when its odds drop but never runs backwards, and even a long shot keeps running. Only a horse that has clinched crosses the finish line. ` +
+    `Past weeks are replayed from the standings at the time with ${RACE_SIMS.toLocaleString("en-US")} simulations each, using today's rosters with that week's projections, so early weeks are a close reconstruction.`;
   race.t = 0; race.last = 0; race.calledFor = -1; race.playing = true; $("race-play").textContent = "Pause";
   race.raf = requestAnimationFrame(raceLoop);
 }
