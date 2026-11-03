@@ -846,7 +846,84 @@ function clinchNeeds(d, rules, X) {
     }
     return Infinity;  // winning out isn't enough on its own
   };
-  return { playoff: need(false), division: k ? need(true) : undefined };
+  // ---- elimination: the mirror image. X wins every game except N (the N that help it most),
+  // every other result goes X's way, and a record tie goes to X (it could win on points).
+  // X is still alive if some set A of rivals allowed to finish above it keeps it in:
+  // fewer than k division-mates above, or few enough leftovers above for a record spot.
+  const aliveWith = (wins, Wx) => {
+    const above = [], open = [];  // already out of reach above X, and still uncertain
+    for (let t = 0; t < T; t++) if (t !== X) {
+      if (wins[t] > Wx) above.push(t);
+      else if (wins[t] + W * (median ? 2 : 1) > Wx) open.push(t);
+    }
+    // can every open game be decided with each team outside A finishing at most Wx?
+    const fits = A => {
+      const inA = new Set(A); let n = 2; const E = []; const id = new Map(); let demand = 0;
+      for (let t = 0; t < T; t++) if (t !== X) id.set(t, n++);
+      for (const [t, v] of id) E.push([v, 1, inA.has(t) ? 1e6 : Math.max(0, Math.floor(Wx - wins[t]))]);
+      for (const [w, a, b] of others) { const g = n++; E.push([0, g, 1], [g, id.get(a), 1], [g, id.get(b), 1]); demand++; }
+      if (median) for (let w = 0; w < W; w++) {
+        const sup = Math.floor(T / 2) - (medianWon.has(w) ? 1 : 0), g = n++;
+        E.push([0, g, sup]); demand += sup;
+        for (const [, v] of id) E.push([g, v, 1]);
+      }
+      return maxFlowOK(n, E, demand);
+    };
+    const divOf = t => k ? teams[t].division : 0;
+    const groupsOf = ts => { const m = new Map(); for (const t of ts) { if (!m.has(divOf(t))) m.set(divOf(t), []); m.get(divOf(t)).push(t); } return m; };
+    const mine = divOf(X);
+    // route 1: win a division spot (fewer than k mates above)
+    if (k) {
+      const mAbove = above.filter(t => divOf(t) === mine), mOpen = open.filter(t => divOf(t) === mine);
+      const rest = open.filter(t => divOf(t) !== mine);
+      const room = k - 1 - mAbove.length;
+      if (room >= 0 && combos(mOpen, Math.min(room, mOpen.length), sub => { budget--; return fits(above.concat(rest, sub)); })) return true;
+    }
+    // route 2: a record spot. Per division, up to k above are absorbed by its division spots;
+    // beyond that at most B - 1 leftovers in total may finish above X.
+    if (!B) return false;
+    const aboveG = groupsOf(above), openG = groupsOf(open);
+    const divs = [...new Set([...aboveG.keys(), ...openG.keys(), mine])];
+    const absorb = k;  // with no divisions k = 0, so every team above is a leftover
+    let leftoverFixed = 0;
+    for (const dv of divs) leftoverFixed += Math.max(0, (aboveG.get(dv) || []).length - absorb);
+    if (leftoverFixed > B - 1) return false;
+    // in X's own division X must miss the top k for this route, so allow k mates above anyway
+    let ok = false;
+    const extra = (di, left, acc) => {
+      if (ok || budget <= 0) return;
+      if (di === divs.length) { budget--; if (fits(acc)) ok = true; return; }
+      const dv = divs[di], fixed = (aboveG.get(dv) || []).length, cand = openG.get(dv) || [];
+      const free = Math.max(0, absorb - fixed);  // more teams this division can have above without cost
+      for (let e = 0; e <= left && !ok; e++) {
+        const r = Math.min(cand.length, free + e);
+        if (e && free + e > cand.length) break;
+        combos(cand, r, sub => { extra(di + 1, left - e, acc.concat(sub)); return ok; });
+      }
+    };
+    extra(0, B - 1 - leftoverFixed, [...above]);
+    if (budget <= 0 && !ok) return null;
+    return ok;
+  };
+  const eliminateAfter = () => {
+    if (rules.pts) return undefined;  // a points-for spot keeps everyone alive
+    for (let n = 0; n <= myGames.length; n++) {
+      let allDead = true, unknown = false;
+      combos(myGames, n, lost => {
+        const wins = [...base]; const set = new Set(lost);
+        medianWon = new Set(myGames.filter(g => g[1] < 0 && !set.has(g)).map(g => g[0]));
+        for (const g of myGames) if (!set.has(g)) wins[X] += 1; else if (g[1] >= 0) wins[g[1]] += 1;
+        const a = aliveWith(wins, wins[X]);
+        if (a === null) { unknown = true; return true; }
+        if (a) { allDead = false; return true; }
+        return false;
+      });
+      if (unknown) return null;
+      if (allDead) return n;
+    }
+    return Infinity;  // still alive even after losing out, with help
+  };
+  return { playoff: need(false), division: k ? need(true) : undefined, eliminate: eliminateAfter() };
 }
 
 async function compute(d, rules, onProgress) {
@@ -981,11 +1058,17 @@ function clinchText(t) {
   if (!clinchCache.has(key)) clinchCache.set(key, clinchNeeds(S.data, S.rules, t.idx));
   const c = clinchCache.get(key);
   if (c.reason === "points") return "Playoff spots go by points, so nothing clinches before the season ends.";
+  const losses = n => `${n} more loss${n === 1 ? "" : "es"}${S.data.median ? " (median losses count)" : ""}`;
   const wins = n => `${n} more win${n === 1 ? "" : "s"}${S.data.median ? " (median wins count)" : ""}`;
   const line = (label, n) => n === 0 ? `${label}: clinched` : n === null ? `${label}: too many scenarios to check` :
     n === Infinity ? `${label}: needs help, even winning out` : `${label}: ${wins(n)}, no help needed`;
   const parts = [line("Clinch playoffs", c.playoff)];
   if (c.division !== undefined && S.rules.div > 0) parts.push(line("Clinch division", c.division));
+  if (c.playoff !== 0) parts.push(
+    c.eliminate === undefined ? "Eliminated: can't happen before the season ends (points-for spot)" :
+    c.eliminate === null ? "Eliminated: too many scenarios to check" :
+    c.eliminate === Infinity ? "Eliminated: still alive even losing out, with help" :
+    `Eliminated: after ${losses(c.eliminate)}, whatever else happens`);
   return parts.join("\n");
 }
 function tipHTML(t) {
