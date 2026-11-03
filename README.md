@@ -28,6 +28,14 @@ The last username, league and rules are also remembered in your browser (`localS
   name, position and NFL team and scored with the ESPN league's scoring settings. Defenses use Sleeper's
   standard defense points. Any player who can't be matched falls back to ESPN's projection.
 
+## The playoff race
+
+**Watch the playoff race** turns the season into a horse race: each horse's spot on the track is that
+team's playoff odds after each week, and they gallop week to week with commentary on the biggest movers.
+Past weeks are replayed from the standings at the time (10,000 simulations each), using today's rosters
+with that week's projections, so early weeks are a close reconstruction rather than exactly what the
+chart said then.
+
 ## How the odds work
 
 - Each team's expected score each remaining week is the best lineup its current roster can field,

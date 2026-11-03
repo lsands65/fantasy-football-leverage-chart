@@ -20,6 +20,9 @@
   --edge: rgba(40, 32, 20, .22);
   --chip: #ffffff;
   --grain: .55;
+  --turf: #4f8a3c;
+  --turf-dark: #457a34;
+  --rail: #f7f3ea;
   --display: "Rubik", "Arial Black", system-ui, sans-serif;
   --label: "Roboto Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
   color-scheme: light;
@@ -27,13 +30,13 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --paper: #1d1c1a; --ink: #ece7de; --ink-soft: #a29b90; --loss: #f59a45; --win: #5db3ee;
-    --edge: rgba(255, 248, 235, .35); --chip: #2a2926; --grain: .18;
+    --edge: rgba(255, 248, 235, .35); --chip: #2a2926; --grain: .18; --turf: #2f5a27; --turf-dark: #294f22; --rail: #d9d2c4;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --paper: #1d1c1a; --ink: #ece7de; --ink-soft: #a29b90; --loss: #f59a45; --win: #5db3ee;
-  --edge: rgba(255, 248, 235, .35); --chip: #2a2926; --grain: .18;
+  --edge: rgba(255, 248, 235, .35); --chip: #2a2926; --grain: .18; --turf: #2f5a27; --turf-dark: #294f22; --rail: #d9d2c4;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -117,6 +120,14 @@ details.rules summary span { font-weight: 400; color: var(--ink-soft); }
 }
 .tip strong { font-size: 1rem; }
 .tip .k { color: var(--ink-soft); }
+.race { display: grid; gap: 10px; }
+.race-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 16px; }
+.race-head h2 { font-family: var(--display); font-weight: 800; font-size: clamp(1.4rem, 4vw, 2rem); margin: 0; }
+.race-week { font: 700 1.2rem/1 var(--label); color: var(--win); font-variant-numeric: tabular-nums; }
+.race-call { margin: 0; min-height: 2.8em; font-size: 1.05rem; line-height: 1.4; max-width: 75ch; }
+.race-track { overflow-x: auto; border-radius: 10px; }
+.race-track svg { display: block; width: 100%; min-width: 680px; height: auto; font-family: var(--label); }
+.race .note { color: var(--ink-soft); font-size: .88rem; margin: 0; max-width: 75ch; }
 .details { border: 1.5px solid var(--edge); border-radius: 8px; padding: 12px 16px; display: grid; gap: 10px; background: var(--chip); }
 .details-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
 .details h2 { font: 700 1.3rem/1.2 var(--label); margin: 0; }
@@ -200,12 +211,27 @@ footer p { margin: 0; }
     <button class="btn" type="button" id="copy-png">Copy chart as PNG</button>
     <button class="btn ghost" type="button" id="show-png">Show as image</button>
     <button class="btn ghost" type="button" id="copy-link">Copy share link</button>
+    <button class="btn ghost" type="button" id="race-open">Watch the playoff race</button>
     <span class="status" id="status" aria-live="polite"></span>
   </div>
   <div class="preview" id="preview" hidden>
     <p>Right-click the image (or press and hold on a phone) to copy or save it.</p>
     <img id="preview-img" alt="Playoff leverage chart as an image">
   </div>
+  <section class="race" id="race" hidden>
+    <div class="race-head">
+      <h2>The Playoff Race</h2>
+      <span class="race-week" id="race-week"></span>
+      <div class="tools">
+        <button class="btn" type="button" id="race-play">Pause</button>
+        <button class="btn ghost" type="button" id="race-replay">Replay</button>
+        <button class="btn ghost" type="button" id="race-close">Back to the chart</button>
+      </div>
+    </div>
+    <p class="race-call" id="race-call" aria-live="polite"></p>
+    <div class="race-track" id="race-track"></div>
+    <p class="note" id="race-note"></p>
+  </section>
   <div class="plot" id="plot"><p class="empty">Enter a Sleeper username or an ESPN league to see playoff odds.</p></div>
   <section class="details" id="details" hidden aria-live="polite">
     <div class="details-head">
@@ -452,7 +478,7 @@ async function loadSleeper(entry, onStep) {
   const idx = new Map(rosters.map((r, i) => [r.roster_id, i]));
   const hist = rosters.map(r => weekly.slice(0, done).map(ms => (ms.find(m => m.roster_id === r.roster_id) || {}).points || 0));
   const future = weeks.filter(w => w >= levWeek);
-  d.pairs = future.map(w => {
+  const pairsOf = w => {
     const by = new Map();
     for (const m of weekly[w - 1]) {
       if (m.matchup_id == null) continue;
@@ -460,7 +486,9 @@ async function loadSleeper(entry, onStep) {
       by.get(m.matchup_id).push(idx.get(m.roster_id));
     }
     return [...by.values()].filter(v => v.length === 2);
-  });
+  };
+  d.pairs = future.map(pairsOf);
+  d.past = { pairs: weeks.slice(0, done).map(pairsOf), scores: hist };
 
   onStep("Loading projections…");
   let mu = null;
@@ -472,6 +500,14 @@ async function loadSleeper(entry, onStep) {
       return bestLineup(sleeperPool((r.players || []).filter(p => !taxi.has(p)), projs[wi], w, levWeek, lg.scoring_settings), slots);
     }));
   } catch (e) { mu = null; }
+  // the playoff race replays past weeks: today's rosters with that week's projections, no injury filter
+  d.lineupsFor = async w => {
+    const slots = lg.roster_positions.filter(p => SLOTS[p]), proj = await projections(season, w);
+    return rosters.map(r => {
+      const taxi = new Set(r.taxi || []);
+      return bestLineup(sleeperPool((r.players || []).filter(p => !taxi.has(p)), proj, w, -99, lg.scoring_settings), slots);
+    });
+  };
 
   d.teams = await withPictures(rosters.map(r => {
     const u = userById.get(r.owner_id) || {}, meta = u.metadata || {};
@@ -540,7 +576,9 @@ async function loadESPN(entry, onStep) {
   const hist = raw.teams.map(t => Array.from({ length: done }, (_, k) => pointsIn(t, k + 1)));
   const future = [];
   for (let w = levWeek; w <= regWeeks; w++) future.push(w);
-  d.pairs = future.map(w => sched.filter(m => m.matchupPeriodId === w && m.away).map(m => [idx.get(m.home.teamId), idx.get(m.away.teamId)]));
+  const pairsOf = w => sched.filter(m => m.matchupPeriodId === w && m.away).map(m => [idx.get(m.home.teamId), idx.get(m.away.teamId)]);
+  d.pairs = future.map(pairsOf);
+  d.past = { pairs: Array.from({ length: done }, (_, k) => pairsOf(k + 1)), scores: hist };
 
   onStep("Loading projections…");
   const teamsInfo = await espnProTeams(season);
@@ -568,27 +606,27 @@ async function loadESPN(entry, onStep) {
     return byKey.get(playerKey(p.fullName, pos, team)) || byKey.get(playerKey(p.fullName, pos)) || null;
   };
   let matched = 0, total = 0;
-  const pool = (t, w, wi) => {
+  const pool = (t, w, wk, count, past) => {
     const out = [];
     for (const e of (t.roster && t.roster.entries) || []) {
       const p = e.playerPoolEntry && e.playerPoolEntry.player, pos = p && ESPN_POS[p.defaultPositionId];
       if (!pos) continue;
-      const sid = sleeperWeeks && sleeperId(p, pos);
-      if (wi === 0) { total++; matched += !!sid; }
+      const sid = wk && sleeperId(p, pos);
+      if (count) { total++; matched += !!sid; }
       const ir = e.lineupSlotId === 21 || p.injuryStatus === "INJURY_RESERVE";
       let pts;
       if (sid) {
-        const x = sleeperWeeks[wi].get(sid);
+        const x = wk.get(sid);
         if (!x || !x.stats) continue;  // bye week or no projection
         const inj = x.player && x.player.injury_status;
-        if ((w === levWeek && (ir || OUT_NOW.has(inj) || OUT_LONG.has(inj))) || (w < levWeek + 3 && (ir || OUT_LONG.has(inj)))) continue;
+        if (!past && ((w === levWeek && (ir || OUT_NOW.has(inj) || OUT_LONG.has(inj))) || (w < levWeek + 3 && (ir || OUT_LONG.has(inj))))) continue;
         pts = pos === "DEF" ? (x.stats.pts_std || 0) : fantasyPoints(x.stats, scoring);
         if (pts) out.push([pts, pos, x.team, x.opponent]);
         continue;
       } else {
         // no Sleeper match: ESPN's own projection (this week's, else season projection per game)
         if ((teamsInfo.get(p.proTeamId) || {}).bye === w) continue;
-        if ((w === levWeek && (ir || ["OUT", "DOUBTFUL", "SUSPENSION"].includes(p.injuryStatus))) || (w < levWeek + 3 && ir)) continue;
+        if (!past && ((w === levWeek && (ir || ["OUT", "DOUBTFUL", "SUSPENSION"].includes(p.injuryStatus))) || (w < levWeek + 3 && ir))) continue;
         const st = p.stats || [];
         const wk = st.find(x => x.seasonId === season && x.scoringPeriodId === w && x.statSourceId === 1 && x.statSplitTypeId === 1);
         const yr = st.find(x => x.seasonId === season && x.scoringPeriodId === 0 && x.statSourceId === 1 && x.statSplitTypeId === 0);
@@ -598,7 +636,12 @@ async function loadESPN(entry, onStep) {
     }
     return out;
   };
-  let mu = future.map((w, wi) => raw.teams.map(t => bestLineup(pool(t, w, wi), slots)));
+  let mu = future.map((w, wi) => raw.teams.map(t => bestLineup(pool(t, w, sleeperWeeks && sleeperWeeks[wi], wi === 0, false), slots)));
+  d.lineupsFor = async w => {
+    let wk = null;
+    try { wk = await projections(season, w); } catch (e) { wk = null; }
+    return raw.teams.map(t => bestLineup(pool(t, w, wk, false, true), slots));
+  };
   d.projSource = sleeperWeeks && matched ? "Sleeper" : "ESPN";
   d.matched = [matched, total];
   if (!mu.flat().some(l => l.total > 0)) mu = null;  // roster data hidden: fall back to scoring history
@@ -634,7 +677,7 @@ function rng(seed) {  // mulberry32
   return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
     t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
 }
-async function simulate(d, rules, onProgress) {
+async function simulate(d, rules, onProgress, sims = N_SIMS) {
   const { T, pairs, mu, chol, sd, median, teams } = d, W = pairs.length;
   const z = new Float64Array(T);
   const divs = teams.map(t => t.division), divList = divisionsOf(d);
@@ -656,8 +699,8 @@ async function simulate(d, rules, onProgress) {
   };
   const key = i => wins[i] * 1e6 + pts[i];  // record first, then points for
   const CHUNK = 2500;
-  for (let s0 = 0; s0 < N_SIMS; s0 += CHUNK) {
-    for (let s = s0; s < Math.min(s0 + CHUNK, N_SIMS); s++) {
+  for (let s0 = 0; s0 < sims; s0 += CHUNK) {
+    for (let s = s0; s < Math.min(s0 + CHUNK, sims); s++) {
       for (let i = 0; i < T; i++) { wins[i] = rec[i]; pts[i] = teams[i].pf; }
       for (let w = 0; w < W; w++) {
         if (chol) {
@@ -697,7 +740,7 @@ async function simulate(d, rules, onProgress) {
         if (levWin[i]) { nWin[i]++; madeWin[i] += pick[i]; }
       }
     }
-    onProgress(Math.min(s0 + CHUNK, N_SIMS) / N_SIMS);
+    onProgress(Math.min(s0 + CHUNK, sims) / sims);
     await new Promise(r => setTimeout(r));  // keep the page responsive
   }
   return { made, madeWin, nWin, divTop, divTopWin, pfPick };
@@ -1139,7 +1182,9 @@ function clinchInfo(t) {
   const key = `${S.league.key}|${rulesToParam(S.rules)}|${t.idx}`;
   if (!clinchCache.has(key)) {
     const e = makeEngine(S.data, S.rules, t.idx);
-    clinchCache.set(key, { playoff: e.k || e.B ? e.winsNeeded(false) : undefined, division: e.k ? e.winsNeeded(true) : undefined, eliminate: e.lossesToOut() });
+    // with a points-for spot nobody is out on paper, so also say when the record-based spots are gone
+    const recordOut = S.rules.pts && (e.k || e.B) ? makeEngine(S.data, Object.assign({}, S.rules, { pts: 0 }), t.idx).lossesToOut() : undefined;
+    clinchCache.set(key, { playoff: e.k || e.B ? e.winsNeeded(false) : undefined, division: e.k ? e.winsNeeded(true) : undefined, eliminate: e.lossesToOut(), recordOut });
   }
   return clinchCache.get(key);
 }
@@ -1173,7 +1218,14 @@ function clinchText(t) {
   if (c.playoff !== undefined) parts.push(line("Clinch playoffs", c.playoff));
   if (c.division !== undefined && S.rules.div > 0) parts.push(line("Clinch division", c.division));
   if (c.playoff !== 0) {
-    if (c.eliminate === undefined) { const r = pfRace(t); if (r) parts.push(r); }
+    if (c.eliminate === undefined) {
+      const spots = S.rules.div > 0 ? "division and record spots" : "record spots";
+      if (c.recordOut !== undefined) parts.push(c.recordOut === 0 ? `Out of the ${spots}; only the points-for spot is left` :
+        c.recordOut === null ? `Out of the ${spots}: too many scenarios to check` :
+        c.recordOut === Infinity ? `Out of the ${spots}: still alive even losing out, with help` :
+        `Out of the ${spots}: after ${losses(c.recordOut)}, whatever else happens`);
+      const r = pfRace(t); if (r) parts.push(r);
+    }
     else parts.push(c.eliminate === null ? "Eliminated: too many scenarios to check" :
       c.eliminate === Infinity ? "Eliminated: still alive even losing out, with help" :
       `Eliminated: after ${losses(c.eliminate)}, whatever else happens`);
@@ -1350,6 +1402,7 @@ function draw() {
   const plot = $("plot"), tip = $("tip");
   plot.innerHTML = "";
   $("details").hidden = true;
+  if (!$("race").hidden) closeRace();
   $("preview").hidden = true; $("status").textContent = ""; $("tools").hidden = false;
   const svg = render(v);
   plot.appendChild(svg);
@@ -1522,6 +1575,144 @@ $("copy-link").addEventListener("click", async () => {
   catch (e) { $("status").textContent = location.href; }
 });
 
+// ---------- the playoff race: playoff odds after every week, as a horse race ----------
+// Each past week is replayed: standings as they stood, today's rosters with that week's
+// projections, and a fresh (smaller) simulation of the rest of the season from there.
+const RACE_SIMS = 10000;
+const raceCache = new Map();
+async function raceSeries(d, rules, onProgress) {
+  const T = d.T, done = d.done, series = [];
+  let muPast = null, cholPast = null;
+  if (d.model === "projections" && d.lineupsFor) {
+    const lineups = [];
+    for (let w = 1; w <= done; w++) { onProgress(`Loading week ${w} projections…`); lineups.push(await d.lineupsFor(w)); }
+    muPast = lineups.map(wk => wk.map(l => l.total)); cholPast = lineups.map(weekCholesky);
+  }
+  for (let w0 = 0; w0 <= done; w0++) {  // standings with w0 weeks played
+    onProgress(`Replaying week ${w0 + 1} of ${done + 1}…`);
+    const wins = new Float64Array(T), pf = new Float64Array(T);
+    for (let w = 0; w < w0; w++) {
+      const sc = d.past.scores.map(h => h[w] || 0);
+      for (let i = 0; i < T; i++) pf[i] += sc[i];
+      for (const [a, b] of d.past.pairs[w]) { if (sc[a] > sc[b]) wins[a]++; else if (sc[b] > sc[a]) wins[b]++; else { wins[a] += .5; wins[b] += .5; } }
+      if (d.median) { const sorted = [...sc].sort((x, y) => x - y), med = (sorted[(T >> 1) - 1] + sorted[T >> 1]) / 2; for (let i = 0; i < T; i++) if (sc[i] > med) wins[i]++; }
+    }
+    const teams = d.teams.map((t, i) => Object.assign({}, t, { wins: wins[i], ties: 0, pf: pf[i] }));
+    const pastLeft = d.past.pairs.slice(w0);
+    const dw = Object.assign({}, d, { teams, pairs: pastLeft.concat(d.pairs),
+      mu: muPast ? muPast.slice(w0).concat(d.mu) : pastLeft.map(() => d.mu[0]).concat(d.mu),
+      chol: muPast && d.chol ? cholPast.slice(w0).concat(d.chol) : null });
+    const sim = await simulate(dw, rules, () => {}, RACE_SIMS);
+    series.push(Array.from(sim.made, m => m / RACE_SIMS));
+  }
+  return series;
+}
+
+const race = { frames: null, rows: null, t: 0, playing: true, raf: 0, last: 0, calledFor: -1 };
+const STEP_MS = 2200, HOLD_MS = 700;
+function raceCommentary(prev, cur, week, final) {
+  const rows = race.rows, moves = rows.map((r, i) => [cur[i] - prev[i], i]).sort((a, b) => b[0] - a[0]);
+  const name = i => rows[i].name;
+  if (week === 0) return `And they're off! ${rows.length} teams break from the gate chasing ${S.view.spots} playoff spots.`;
+  const [up, ui] = moves[0], [down, di] = moves[moves.length - 1];
+  const leader = cur.indexOf(Math.max(...cur)), bits = [];
+  if (up > .04) bits.push(`${name(ui)} surges ${Math.round(up * 100)} points to ${pct(cur[ui])}!`);
+  if (down < -.04) bits.push(`${name(di)} ${down < -.15 ? "stumbles badly" : "fades"}, down ${Math.round(-down * 100)} to ${pct(cur[di])}.`);
+  if (!bits.length) bits.push("The pack holds steady.");
+  bits.push(final ? `Down the stretch, it's ${name(leader)} out front at ${pct(cur[leader])}.` : `${name(leader)} leads at ${pct(cur[leader])}.`);
+  return bits.join(" ");
+}
+function raceDraw(now) {
+  const rows = race.rows, frames = race.frames, nF = frames.length;
+  const seg = STEP_MS + HOLD_MS, total = (nF - 1) * seg;
+  const t = Math.min(race.t, total), k = Math.max(0, Math.min(nF - 2, Math.floor(t / seg))), local = t - k * seg;
+  const f = nF === 1 ? 1 : Math.min(1, local / STEP_MS), ease = f < .5 ? 2 * f * f : 1 - (-2 * f + 2) ** 2 / 2;
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const svg = $("race-track").querySelector("svg"), X0 = 150, X1 = 900, LH = +svg.dataset.lane;
+  rows.forEach((r, i) => {
+    const a = frames[k][i], b = frames[nF === 1 ? 0 : k + 1][i], v = nF === 1 ? a : a + (b - a) * ease;
+    const g = svg.querySelector(`[data-h="${i}"]`), x = X0 + v * (X1 - X0);
+    const moving = f < 1 && nF > 1, speed = moving ? Math.abs(b - a) : 0;
+    // faster gallop (and a bigger bob) for teams whose odds are moving more this week
+    const bob = reduce || !moving ? 0 : Math.sin(now / (70 - Math.min(50, speed * 300)) + i) * (1.5 + speed * 14);
+    g.setAttribute("transform", `translate(${x} ${(i + .5) * LH + bob})`);
+    g.querySelector(".pct").textContent = pct(v);
+    g.querySelector(".dust").setAttribute("opacity", !reduce && moving && b - a > .05 ? .9 : 0);
+  });
+  const week = Math.min(nF - 1, k + (f >= 1 && nF > 1 ? 1 : 0));
+  $("race-week").textContent = week === 0 ? "Before week 1" : week === nF - 1 ? `After week ${week} (today)` : `After week ${week}`;
+  if (race.calledFor !== week) {
+    race.calledFor = week;
+    $("race-call").textContent = raceCommentary(frames[Math.max(0, week - 1)], frames[week], week, week === nF - 1);
+  }
+  return t >= total;
+}
+function raceLoop(now) {
+  if (race.playing && race.last) race.t += now - race.last;
+  race.last = now;
+  if (raceDraw(now) && race.playing) { race.playing = false; $("race-play").textContent = "Play"; }
+  if (!$("race").hidden) race.raf = requestAnimationFrame(raceLoop);
+}
+function raceTrack(rows) {
+  const n = rows.length, LH = n > 16 ? 26 : 44, W = 1000, X0 = 150, X1 = 900, H = n * LH;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H + 30}`, role: "img", "aria-label": "Playoff odds after each week, drawn as a horse race" });
+  svg.dataset.lane = LH;
+  el("rect", { x: 0, y: 0, width: W, height: H, fill: "var(--turf)" }, svg);
+  for (let i = 0; i < n; i++) {
+    if (i % 2) el("rect", { x: 0, y: i * LH, width: W, height: LH, fill: "var(--turf-dark)" }, svg);
+    if (i) el("line", { x1: 0, x2: W, y1: i * LH, y2: i * LH, stroke: "var(--rail)", "stroke-opacity": .35, "stroke-dasharray": "6 8" }, svg);
+  }
+  for (const v of [0, .25, .5, .75]) {  // odds marks along the track; the finish line is 100%
+    const x = X0 + v * (X1 - X0);
+    el("line", { x1: x, x2: x, y1: 0, y2: H, stroke: "var(--rail)", "stroke-opacity": .25 }, svg);
+    text(svg, x, H + 16, `${v * 100}%`, { "text-anchor": "middle", fill: "var(--ink-soft)", "font-size": 13 });
+  }
+  for (let y = 0, r = 0; y < H; y += 6, r++) for (let c = 0; c < 2; c++) el("rect", { x: X1 + c * 6, y, width: 6, height: 6, fill: (r + c) % 2 ? "#fff" : "#111" }, svg);
+  text(svg, X1 + 6, H + 16, "PLAYOFFS", { "text-anchor": "middle", fill: "var(--ink)", "font-size": 13, "font-weight": 700 });
+  rows.forEach((r, i) => {
+    text(svg, 8, (i + .5) * LH, r.name.length > 20 ? r.name.slice(0, 19) + "…" : r.name, { fill: "var(--rail)", "font-size": LH > 30 ? 15 : 12, "font-weight": 700 });
+    const g = el("g", { "data-h": i }, svg), s = LH * .9;
+    el("text", { class: "dust", x: -s * 1.1, y: 2, "dominant-baseline": "central", "text-anchor": "middle", "font-size": s * .55, opacity: 0 }, g).textContent = "💨";
+    // the horse faces right; the team's picture rides as its silks
+    el("text", { x: 0, y: 0, "dominant-baseline": "central", "text-anchor": "middle", "font-size": s, transform: "scale(-1 1)" }, g).textContent = "🏇";
+    const cid = `silk${i}`, cp = el("clipPath", { id: cid }, svg);
+    el("circle", { cx: s * .1, cy: -s * .3, r: s * .2 }, cp);
+    el("circle", { cx: s * .1, cy: -s * .3, r: s * .22, fill: colorFor(r, i), stroke: "#fff", "stroke-width": 1.5 }, g);
+    if (r.avatar) el("image", { href: r.avatar, x: s * .1 - s * .2, y: -s * .3 - s * .2, width: s * .4, height: s * .4, "clip-path": `url(#${cid})`, preserveAspectRatio: "xMidYMid slice" }, g);
+    el("text", { class: "pct", x: s * .7, y: 1, "dominant-baseline": "central", fill: "#fff", "font-size": LH > 30 ? 15 : 12, "font-weight": 700, stroke: "rgba(0,0,0,.45)", "stroke-width": 3, "paint-order": "stroke" }, g);
+  });
+  return svg;
+}
+async function openRace() {
+  const sec = $("race"), key = `${S.league.key}|${rulesToParam(S.rules)}`;
+  sec.hidden = false; $("plot").hidden = true; $("details").hidden = true; $("tip").hidden = true;
+  $("race-track").innerHTML = ""; $("race-week").textContent = ""; $("race-note").textContent = "";
+  cancelAnimationFrame(race.raf);
+  try {
+    if (!raceCache.has(key)) raceCache.set(key, await raceSeries(S.data, S.rules, msg => { $("race-call").textContent = msg; }));
+  } catch (e) { $("race-call").textContent = "Couldn't replay the season: " + e.message; return; }
+  if (sec.hidden) return;
+  const series = raceCache.get(key).slice(), byIdx = S.view.rows.slice().sort((a, b) => a.idx - b.idx);
+  series[series.length - 1] = byIdx.map(r => r.now);  // finish on the chart's own numbers
+  const order = byIdx.map((r, i) => i).sort((a, b) => byIdx[b].now - byIdx[a].now);  // lanes in today's order
+  race.rows = order.map(i => byIdx[i]);
+  race.frames = series.map(f => order.map(i => f[i]));
+  $("race-track").appendChild(raceTrack(race.rows));
+  $("race-note").textContent = `Each horse's spot is that team's playoff odds after each week. Past weeks are replayed from the standings at the time ` +
+    `with ${RACE_SIMS.toLocaleString("en-US")} simulations each, using today's rosters with that week's projections, so early weeks are a close reconstruction rather than exactly what the chart said then.`;
+  race.t = 0; race.last = 0; race.calledFor = -1; race.playing = true; $("race-play").textContent = "Pause";
+  race.raf = requestAnimationFrame(raceLoop);
+}
+function closeRace() { $("race").hidden = true; $("plot").hidden = false; cancelAnimationFrame(race.raf); }
+$("race-open").addEventListener("click", openRace);
+$("race-close").addEventListener("click", closeRace);
+$("race-play").addEventListener("click", () => {
+  if (!race.frames) return;
+  if (!race.playing && race.t >= (race.frames.length - 1) * (STEP_MS + HOLD_MS)) { race.t = 0; race.calledFor = -1; }
+  race.playing = !race.playing; race.last = 0; $("race-play").textContent = race.playing ? "Pause" : "Play";
+});
+$("race-replay").addEventListener("click", () => { race.t = 0; race.last = 0; race.calledFor = -1; race.playing = true; $("race-play").textContent = "Pause"; });
+
 // ---------- details panel: this week's paths, and the rest of the season ----------
 function showDetails(t) {
   const d = S.data, v = S.view, box = $("details"), body = $("d-body");
@@ -1567,7 +1758,17 @@ function showDetails(t) {
         else if (help.divisionWin === null && help.divisionLoss === null) thisWeek.push(li("Can't clinch the division this week."));
         else { say(help.divisionWin, false, `Clinches the division with a win over ${opp}`, ""); say(help.divisionLoss, false, "Clinches the division even with a loss", ""); }
       }
-      if (S.rules.pts) { const r = pfRace(t); if (r) r.split("\n").forEach(line => thisWeek.push(li(line))); }
+      if (S.rules.pts) {
+        const spots = S.rules.div > 0 ? "the division and record spots" : "the record spots";
+        if (c.recordOut === 0) thisWeek.push(li(`Already out of ${spots}; only the points-for spot is left.`));
+        else if (c.recordOut !== undefined) {
+          const h2 = weekHelp(d, Object.assign({}, S.rules, { pts: 0 }), t.idx);
+          if (h2.outLoss === null && h2.outWin === null) thisWeek.push(li(`Can't drop out of ${spots} this week.`));
+          say(h2.outLoss, false, `Drops out of ${spots} with a loss to ${opp}`, "");
+          say(h2.outWin, false, `Drops out of ${spots} even with a win`, "");
+        }
+        const r = pfRace(t); if (r) r.split("\n").forEach(line => thisWeek.push(li(line)));
+      }
       else if (c.playoff !== 0) {
         if (help.outLoss === null && help.outWin === null) thisWeek.push(li("Can't be eliminated this week."));
         say(help.outLoss, false, `Eliminated with a loss to ${opp}`, "");
