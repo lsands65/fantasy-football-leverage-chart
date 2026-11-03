@@ -30,11 +30,12 @@ The last username, league and rules are also remembered in your browser (`localS
 
 ## The playoff race
 
-**Watch the playoff race** turns the season into a horse race: each horse's spot on the track is that
-team's playoff odds after each week, and they gallop week to week with commentary on the biggest movers.
-Past weeks are replayed from the standings at the time (10,000 simulations each), using today's rosters
-with that week's projections, so early weeks are a close reconstruction rather than exactly what the
-chart said then.
+**Watch the playoff race** turns the season into a horse race. Everyone starts at the gate. Each week a
+horse moves forward by its playoff odds that week (its pace), so it slows down when its odds drop but never
+runs backwards; a stride is sized so 100% every week reaches the line at the end of the regular season.
+A horse crosses the finish line only once its team has mathematically clinched, and an eliminated horse
+pulls up. Past weeks are replayed from the standings at the time (10,000 simulations each), using today's
+rosters with that week's projections, so early weeks are a close reconstruction.
 
 ## How the odds work
 
