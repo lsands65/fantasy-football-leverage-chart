@@ -117,6 +117,13 @@ details.rules summary span { font-weight: 400; color: var(--ink-soft); }
 }
 .tip strong { font-size: 1rem; }
 .tip .k { color: var(--ink-soft); }
+.details { border: 1.5px solid var(--edge); border-radius: 8px; padding: 12px 16px; display: grid; gap: 10px; background: var(--chip); }
+.details-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.details h2 { font: 700 1.3rem/1.2 var(--label); margin: 0; }
+.details h3 { font: 700 .95rem/1.2 var(--label); margin: 4px 0 2px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .06em; }
+.details .k { color: var(--ink-soft); margin: 2px 0 0; }
+.details ul { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; max-width: 70ch; }
+.details .note { color: var(--ink-soft); font-size: .88rem; margin: 0; max-width: 75ch; }
 .tip [data-clinch] { white-space: pre-line; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--edge); }
 .tip [data-clinch]:empty { display: none; }
 .tip .grid { display: grid; grid-template-columns: auto auto; gap: 0 14px; margin-top: 4px; font-variant-numeric: tabular-nums; }
@@ -200,6 +207,13 @@ footer p { margin: 0; }
     <img id="preview-img" alt="Playoff leverage chart as an image">
   </div>
   <div class="plot" id="plot"><p class="empty">Enter a Sleeper username or an ESPN league to see playoff odds.</p></div>
+  <section class="details" id="details" hidden aria-live="polite">
+    <div class="details-head">
+      <div><h2 id="d-name"></h2><p class="k" id="d-sub"></p></div>
+      <button class="btn ghost" type="button" id="d-close">Close</button>
+    </div>
+    <div id="d-body"></div>
+  </section>
   <div class="tip" id="tip" hidden></div>
   <footer id="foot"></footer>
 </div>
@@ -628,6 +642,8 @@ async function simulate(d, rules, onProgress) {
   const members = divList.map(v => divs.map((x, i) => x === v ? i : -1).filter(i => i >= 0));
   const rec = teams.map(t => t.wins + .5 * t.ties);
   const made = new Float64Array(T), madeWin = new Float64Array(T), nWin = new Float64Array(T);
+  const divTop = new Float64Array(T), divTopWin = new Float64Array(T), pfPick = new Float64Array(T);
+  const top = new Uint8Array(T), byPts = new Uint8Array(T);
   const wins = new Float64Array(T), pts = new Float64Array(T), sc = new Float64Array(T), tmp = new Float64Array(T);
   const levWin = new Uint8Array(T), pick = new Uint8Array(T), order = [...Array(T).keys()];
   const rand = rng(7);
@@ -665,23 +681,26 @@ async function simulate(d, rules, onProgress) {
         }
       }
       pick.fill(0);
+      top.fill(0); byPts.fill(0);
       if (useDiv) for (const m of members) {
         m.sort((a, b) => key(b) - key(a));
+        top[m[0]] = 1;
         for (let k = 0; k < Math.min(rules.div, m.length); k++) pick[m[k]] = 1;
       }
       order.sort((a, b) => key(b) - key(a));
       for (let k = 0, n = 0; k < T && n < rules.rec; k++) if (!pick[order[k]]) { pick[order[k]] = 1; n++; }
       order.sort((a, b) => pts[b] - pts[a]);
-      for (let k = 0, n = 0; k < T && n < rules.pts; k++) if (!pick[order[k]]) { pick[order[k]] = 1; n++; }
+      for (let k = 0, n = 0; k < T && n < rules.pts; k++) if (!pick[order[k]]) { pick[order[k]] = 1; byPts[order[k]] = 1; n++; }
       for (let i = 0; i < T; i++) {
-        made[i] += pick[i];
+        made[i] += pick[i]; divTop[i] += top[i]; pfPick[i] += byPts[i];
+        if (levWin[i]) divTopWin[i] += top[i];
         if (levWin[i]) { nWin[i]++; madeWin[i] += pick[i]; }
       }
     }
     onProgress(Math.min(s0 + CHUNK, N_SIMS) / N_SIMS);
     await new Promise(r => setTimeout(r));  // keep the page responsive
   }
-  return { made, madeWin, nWin };
+  return { made, madeWin, nWin, divTop, divTopWin, pfPick };
 }
 
 // Mathematical clinch / elimination by record alone, shown with standings letters:
@@ -695,45 +714,18 @@ async function simulate(d, rules, onProgress) {
 //   Eliminated: with no points-for spots, k division-mates and kD + B teams overall
 //   (D divisions) finish ahead no matter what. Points for has no ceiling, so any
 //   points-for spot keeps everyone alive until the season ends.
-function standings(d, rules) {
-  const { T, teams, pairs, median } = d, W = pairs.length;
-  const divs = teams.map(t => t.division), nDiv = divisionsOf(d).length;
-  const k = nDiv > 1 ? rules.div : 0, B = rules.rec;
-  const lo0 = teams.map(t => t.wins + .5 * t.ties), hi0 = lo0.map(v => v + W * (median ? 2 : 1));
-  const one = (i, lo, hi) => {
-    let catchAll = 0, aheadAll = 0, catchMates = 0, aheadMates = 0;
-    for (let j = 0; j < T; j++) {
-      if (j === i) continue;
-      const c = hi[j] >= lo[i], a = lo[j] > hi[i];
-      catchAll += c; aheadAll += a;
-      if (k && divs[j] === divs[i]) { catchMates += c; aheadMates += a; }
-    }
-    if (k && catchMates === 0) return "y";
-    if ((k && catchMates < k) || catchAll < k + B) return "x";
-    if (!rules.pts && (!k || aheadMates >= k) && aheadAll >= k * nDiv + B) return "e";
-    return null;
-  };
-  const opp = new Map();
-  for (const [a, b] of pairs[0] || []) { opp.set(a, b); opp.set(b, a); }
-  return teams.map((t, i) => {
-    const o = opp.get(i);
-    // this week's head-to-head result only; a median game stays open
-    const lw = [...lo0], hw = [...hi0]; lw[i] += 1; if (o != null) hw[o] -= 1;
-    const ll = [...lo0], hl = [...hi0]; hl[i] -= 1; if (o != null) ll[o] += 1;
-    return { now: one(i, lo0, hi0), win: one(i, lw, hw), loss: one(i, ll, hl) };
-  });
-}
-
-// ---------- exact clinch requirements (tooltip) ----------
-// "How many more wins does this team need to clinch, with no help?" answered exactly: the
-// team wins N of its remaining head-to-head games (the worst N for it) and loses the rest
-// and every median game, and every other result is chosen to hurt it. A record tie counts
-// against it (points for can't be guaranteed), and a points-for spot is never counted on.
-// It misses the playoff when at least k division-mates finish level or ahead (k = division
-// spots) and enough of those level-or-ahead teams are left over, after each division's top k,
-// to fill the B record spots. Whether a set of rivals can all get there is a max-flow over
-// the remaining games. Exact, but costly in big leagues, so it runs only for the hovered team
-// and gives up (returns null) past a budget rather than guess.
+// ---------- exact clinch / elimination ----------
+// Everything here is exact, not simulated. For one team X:
+//   clinched: every way the rest of the season can go still puts X in. X loses every game
+//     that isn't fixed, a record tie counts against X (points for can't be guaranteed), and a
+//     points-for spot is never counted on. X misses when at least k division-mates finish level
+//     or ahead (k = division spots) and enough of the level-or-ahead teams are left over, after
+//     each division's top k, to fill the B record spots.
+//   alive: some way the season can go puts X in. X wins every game that isn't fixed, every
+//     other result can go X's way, and a record tie goes to X (it could win on points).
+// Whether a set of rivals can all reach (or all stay under) a number of wins is a max-flow
+// over the remaining games, weekly median games included. A search budget makes a check give
+// up (null) in very large leagues rather than guess.
 function maxFlowOK(nodes, edges, demand) {
   const adj = Array.from({ length: nodes }, () => []), to = [], cap = [];
   const add = (u, v, c) => { adj[u].push(to.length); to.push(v); cap.push(c); adj[v].push(to.length); to.push(u); cap.push(0); };
@@ -748,66 +740,75 @@ function maxFlowOK(nodes, edges, demand) {
     if (++flow >= demand) return true;
   }
 }
-function clinchNeeds(d, rules, X) {
+function combos(arr, r, f) {  // calls f on each r-subset; stops early when f returns true
+  const pick = [];
+  const go = start => {
+    if (pick.length === r) return f(pick);
+    for (let i = start; i <= arr.length - (r - pick.length); i++) { pick.push(arr[i]); if (go(i + 1)) return true; pick.pop(); }
+    return false;
+  };
+  return go(0);
+}
+
+function makeEngine(d, rules, X) {
   const { T, teams, pairs, median } = d, W = pairs.length;
   const nDiv = divisionsOf(d).length, k = nDiv > 1 ? rules.div : 0, B = rules.rec;
-  if (!k && !B) return { playoff: null, division: null, reason: "points" };
   const base = teams.map(t => t.wins + .5 * t.ties);
   const myGames = [];  // [week, opponent], or [week, -1] for that week's median game
   pairs.forEach((ps, w) => ps.forEach(([a, b]) => { if (a === X || b === X) myGames.push([w, a === X ? b : a]); }));
   if (median) for (let w = 0; w < W; w++) myGames.push([w, -1]);
-  let medianWon = new Set();  // weeks in which X takes one of the median wins
-  const others = pairs.flatMap((ps, w) => ps.filter(([a, b]) => a !== X && b !== X).map(([a, b]) => [w, a, b]));
-  let budget = 40000;
+  const allOthers = pairs.flatMap((ps, w) => ps.filter(([a, b]) => a !== X && b !== X).map(([a, b]) => [w, a, b]));
+  const divOf = t => k ? teams[t].division : 0;
+  let budget = 40000, others = allOthers, medianWon = new Set();
+
+  // apply fixed results: X's own games (won set; the rest lost, or the rest won when `winRest`)
+  // and other games (Map game -> winner); returns everyone's wins
+  const setup = (won, lostSet, winRest, otherFix) => {
+    const wins = [...base];
+    medianWon = new Set();
+    for (const g of myGames) {
+      const w = won.has(g) || (winRest && !lostSet.has(g));
+      if (w) { wins[X] += 1; if (g[1] < 0) medianWon.add(g[0]); }
+      else if (g[1] >= 0) wins[g[1]] += 1;
+    }
+    others = allOthers.filter(g => !otherFix.has(g));
+    for (const [, winner] of otherFix) wins[winner] += 1;
+    return wins;
+  };
+  const medianSupply = w => Math.floor(T / 2) - (medianWon.has(w) ? 1 : 0);
 
   // can every team in `need` (team -> wins still required) get there from the open games?
-  const reachable = (wins, need) => {
+  const reachable = need => {
     const ts = [...need.keys()], total = ts.reduce((a, t) => a + need.get(t), 0);
     if (!total) return true;
     const id = new Map(ts.map((t, i) => [t, 2 + i])); let n = 2 + ts.length; const E = [];
     for (const t of ts) E.push([id.get(t), 1, need.get(t)]);
-    for (const [w, a, b] of others) if (id.has(a) || id.has(b)) {
+    for (const [, a, b] of others) if (id.has(a) || id.has(b)) {
       const g = n++; E.push([0, g, 1]);
       if (id.has(a)) E.push([g, id.get(a), 1]); if (id.has(b)) E.push([g, id.get(b), 1]);
     }
-    if (median) for (let w = 0; w < W; w++) {  // each week half the league beats the median
-      const g = n++; E.push([0, g, Math.floor(T / 2) - (medianWon.has(w) ? 1 : 0)]);
-      for (const t of ts) E.push([g, id.get(t), 1]);
-    }
+    if (median) for (let w = 0; w < W; w++) { const g = n++; E.push([0, g, medianSupply(w)]); for (const t of ts) E.push([g, id.get(t), 1]); }
     return maxFlowOK(n, E, total);
   };
-  const combos = (arr, r, f) => {  // calls f on each r-subset; stops early when f returns true
-    const pick = [];
-    const go = start => {
-      if (pick.length === r) return f(pick);
-      for (let i = start; i <= arr.length - (r - pick.length); i++) { pick.push(arr[i]); if (go(i + 1)) return true; pick.pop(); }
-      return false;
-    };
-    return go(0);
-  };
-  // given X's final wins and everyone's current wins, can the rest of the season knock X out?
-  // (rivals' reachable wins assume they can still win every game, median games included)
-  const missable = (wins, Wx, divisionOnly) => {
-    const cands = [];
+  // can the open games knock X (at Wx wins) out? divisionOnly: out of first place in its division
+  const missable = (wins, divisionOnly) => {
+    const Wx = wins[X], cands = [];
     for (let t = 0; t < T; t++) if (t !== X && wins[t] + W * (median ? 2 : 1) >= Wx) cands.push(t);
     const needOf = ts => new Map(ts.map(t => [t, Math.max(0, Math.ceil(Wx - wins[t]))]));
-    const mates = cands.filter(t => k && teams[t].division === teams[X].division);
-    if (divisionOnly) return mates.some(m => reachable(wins, needOf([m])));
-    // division groups of the other candidates
+    const mates = cands.filter(t => k && divOf(t) === divOf(X));
+    if (divisionOnly) return mates.some(m => reachable(needOf([m])));
     const groups = new Map();
-    for (const t of cands) if (!mates.includes(t)) { const g = k ? teams[t].division : 0; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(t); }
+    for (const t of cands) if (!mates.includes(t)) { if (!groups.has(divOf(t))) groups.set(divOf(t), []); groups.get(divOf(t)).push(t); }
     const gl = [...groups.values()];
-    // X's division takes k + e0 mates; other division g takes k + e_g when e_g > 0; extras sum to B
     let found = false;
-    const tryCounts = (gi, left, chosen) => {
+    const tryCounts = (gi, left, chosen) => {  // division gi takes k + e teams when e > 0; extras sum to B
       if (found || budget <= 0) return;
       if (gi === gl.length) {
         if (left) return;
-        const sets = chosen;  // [ [group, count] ]
         const pickAll = (si, acc) => {
           if (found || budget <= 0) return found;
-          if (si === sets.length) { budget--; if (reachable(wins, needOf(acc))) found = true; return found; }
-          const [arr, c] = sets[si];
+          if (si === chosen.length) { budget--; if (reachable(needOf(acc))) found = true; return found; }
+          const [arr, c] = chosen[si];
           return combos(arr, c, sub => pickAll(si + 1, acc.concat(sub)));
         };
         pickAll(0, []);
@@ -821,114 +822,196 @@ function clinchNeeds(d, rules, X) {
     };
     if (k === 0) tryCounts(0, B, []);  // no division spots: one pool, B rivals needed
     else for (let e0 = 0; e0 <= B && !found; e0++) {
-      const c0 = k + e0;
-      if (c0 > mates.length) break;
-      tryCounts(0, B - e0, [[mates, c0]]);
+      if (k + e0 > mates.length) break;
+      tryCounts(0, B - e0, [[mates, k + e0]]);
     }
     if (budget <= 0 && !found) return null;
     return found;
   };
-  // fewest more wins that clinch whichever games they come from
-  const need = divisionOnly => {
-    for (let n = 0; n <= myGames.length; n++) {
-      let all = true, unknown = false;
-      combos(myGames, n, won => {
-        const wins = [...base]; const set = new Set(won);
-        medianWon = new Set(won.filter(g => g[1] < 0).map(g => g[0]));
-        for (const g of myGames) if (set.has(g)) wins[X] += 1; else if (g[1] >= 0) wins[g[1]] += 1;
-        const m = missable(wins, wins[X], divisionOnly);
-        if (m === null) { unknown = true; return true; }
-        if (m) { all = false; return true; }
-        return false;
-      });
-      if (unknown) return null;
-      if (all) return n;
-    }
-    return Infinity;  // winning out isn't enough on its own
-  };
-  // ---- elimination: the mirror image. X wins every game except N (the N that help it most),
-  // every other result goes X's way, and a record tie goes to X (it could win on points).
-  // X is still alive if some set A of rivals allowed to finish above it keeps it in:
-  // fewer than k division-mates above, or few enough leftovers above for a record spot.
-  const aliveWith = (wins, Wx) => {
-    const above = [], open = [];  // already out of reach above X, and still uncertain
+  // can the open games keep X (at Wx wins) in? Some set A of rivals may finish above X:
+  // fewer than k division-mates above (division route), or few enough leftovers above (record route)
+  const aliveWith = wins => {
+    const Wx = wins[X], above = [], open = [];
     for (let t = 0; t < T; t++) if (t !== X) {
       if (wins[t] > Wx) above.push(t);
       else if (wins[t] + W * (median ? 2 : 1) > Wx) open.push(t);
     }
-    // can every open game be decided with each team outside A finishing at most Wx?
-    const fits = A => {
-      const inA = new Set(A); let n = 2; const E = []; const id = new Map(); let demand = 0;
+    const fits = A => {  // every open game decided with each team outside A at most Wx
+      const inA = new Set(A); let n = 2, demand = 0; const E = [], id = new Map();
       for (let t = 0; t < T; t++) if (t !== X) id.set(t, n++);
       for (const [t, v] of id) E.push([v, 1, inA.has(t) ? 1e6 : Math.max(0, Math.floor(Wx - wins[t]))]);
-      for (const [w, a, b] of others) { const g = n++; E.push([0, g, 1], [g, id.get(a), 1], [g, id.get(b), 1]); demand++; }
+      for (const [, a, b] of others) { const g = n++; E.push([0, g, 1], [g, id.get(a), 1], [g, id.get(b), 1]); demand++; }
       if (median) for (let w = 0; w < W; w++) {
-        const sup = Math.floor(T / 2) - (medianWon.has(w) ? 1 : 0), g = n++;
+        const sup = medianSupply(w), g = n++;
         E.push([0, g, sup]); demand += sup;
         for (const [, v] of id) E.push([g, v, 1]);
       }
       return maxFlowOK(n, E, demand);
     };
-    const divOf = t => k ? teams[t].division : 0;
     const groupsOf = ts => { const m = new Map(); for (const t of ts) { if (!m.has(divOf(t))) m.set(divOf(t), []); m.get(divOf(t)).push(t); } return m; };
     const mine = divOf(X);
-    // route 1: win a division spot (fewer than k mates above)
     if (k) {
       const mAbove = above.filter(t => divOf(t) === mine), mOpen = open.filter(t => divOf(t) === mine);
-      const rest = open.filter(t => divOf(t) !== mine);
-      const room = k - 1 - mAbove.length;
+      const rest = open.filter(t => divOf(t) !== mine), room = k - 1 - mAbove.length;
       if (room >= 0 && combos(mOpen, Math.min(room, mOpen.length), sub => { budget--; return fits(above.concat(rest, sub)); })) return true;
     }
-    // route 2: a record spot. Per division, up to k above are absorbed by its division spots;
-    // beyond that at most B - 1 leftovers in total may finish above X.
     if (!B) return false;
     const aboveG = groupsOf(above), openG = groupsOf(open);
     const divs = [...new Set([...aboveG.keys(), ...openG.keys(), mine])];
-    const absorb = k;  // with no divisions k = 0, so every team above is a leftover
-    let leftoverFixed = 0;
-    for (const dv of divs) leftoverFixed += Math.max(0, (aboveG.get(dv) || []).length - absorb);
+    let leftoverFixed = 0;  // per division, up to k above are absorbed by its division spots
+    for (const dv of divs) leftoverFixed += Math.max(0, (aboveG.get(dv) || []).length - k);
     if (leftoverFixed > B - 1) return false;
-    // in X's own division X must miss the top k for this route, so allow k mates above anyway
     let ok = false;
     const extra = (di, left, acc) => {
       if (ok || budget <= 0) return;
       if (di === divs.length) { budget--; if (fits(acc)) ok = true; return; }
       const dv = divs[di], fixed = (aboveG.get(dv) || []).length, cand = openG.get(dv) || [];
-      const free = Math.max(0, absorb - fixed);  // more teams this division can have above without cost
+      const free = Math.max(0, k - fixed);
       for (let e = 0; e <= left && !ok; e++) {
-        const r = Math.min(cand.length, free + e);
         if (e && free + e > cand.length) break;
-        combos(cand, r, sub => { extra(di + 1, left - e, acc.concat(sub)); return ok; });
+        combos(cand, Math.min(cand.length, free + e), sub => { extra(di + 1, left - e, acc.concat(sub)); return ok; });
       }
     };
     extra(0, B - 1 - leftoverFixed, [...above]);
     if (budget <= 0 && !ok) return null;
     return ok;
   };
-  const eliminateAfter = () => {
-    if (rules.pts) return undefined;  // a points-for spot keeps everyone alive
-    for (let n = 0; n <= myGames.length; n++) {
-      let allDead = true, unknown = false;
-      combos(myGames, n, lost => {
-        const wins = [...base]; const set = new Set(lost);
-        medianWon = new Set(myGames.filter(g => g[1] < 0 && !set.has(g)).map(g => g[0]));
-        for (const g of myGames) if (!set.has(g)) wins[X] += 1; else if (g[1] >= 0) wins[g[1]] += 1;
-        const a = aliveWith(wins, wins[X]);
-        if (a === null) { unknown = true; return true; }
-        if (a) { allDead = false; return true; }
-        return false;
-      });
-      if (unknown) return null;
-      if (allDead) return n;
-    }
-    return Infinity;  // still alive even after losing out, with help
+
+  const none = new Set(), noFix = new Map();
+  const api = {
+    k, B, myGames, others: allOthers,
+    // clinched with X's games in `won` won and the rest lost, given fixed other results
+    clinched(won = none, otherFix = noFix, divisionOnly = false) {
+      if (!divisionOnly && !k && !B) return false;
+      if (divisionOnly && !k) return false;
+      const m = missable(setup(won, none, false, otherFix), divisionOnly);
+      return m === null ? null : !m;
+    },
+    // still alive with X's games in `lost` lost and the rest won, given fixed other results
+    alive(lost = none, otherFix = noFix) {
+      if (rules.pts) return true;  // a points-for spot keeps everyone alive
+      return aliveWith(setup(none, lost, true, otherFix));
+    },
+    // fewest more wins that clinch, whichever games they come from
+    winsNeeded(divisionOnly) {
+      for (let n = 0; n <= myGames.length; n++) {
+        let all = true, unknown = false;
+        combos(myGames, n, won => {
+          const c = api.clinched(new Set(won), noFix, divisionOnly);
+          if (c === null) { unknown = true; return true; }
+          if (!c) { all = false; return true; }
+          return false;
+        });
+        if (unknown) return null;
+        if (all) return n;
+      }
+      return Infinity;
+    },
+    // fewest more losses that eliminate, whichever games they are
+    lossesToOut() {
+      if (rules.pts) return undefined;
+      for (let n = 0; n <= myGames.length; n++) {
+        let allDead = true, unknown = false;
+        combos(myGames, n, lost => {
+          const a = api.alive(new Set(lost));
+          if (a === null) { unknown = true; return true; }
+          if (a) { allDead = false; return true; }
+          return false;
+        });
+        if (unknown) return null;
+        if (allDead) return n;
+      }
+      return Infinity;
+    },
   };
-  return { playoff: need(false), division: k ? need(true) : undefined, eliminate: eliminateAfter() };
+  return api;
+}
+
+// Who would get each kind of spot if the season ended today (records, then points for).
+function currentPicture(d, rules) {
+  const { teams } = d, nDiv = divisionsOf(d).length, key = t => (t.wins + .5 * t.ties) * 1e6 + t.pf;
+  const idx = teams.map((_, i) => i), how = new Array(teams.length).fill(null);
+  if (rules.div > 0 && nDiv > 1) for (const dv of divisionsOf(d)) {
+    idx.filter(i => teams[i].division === dv).sort((a, b) => key(teams[b]) - key(teams[a])).slice(0, rules.div).forEach(i => how[i] = "division");
+  }
+  idx.filter(i => !how[i]).sort((a, b) => key(teams[b]) - key(teams[a])).slice(0, rules.rec).forEach(i => how[i] = "record");
+  const byPf = idx.filter(i => !how[i]).sort((a, b) => teams[b].pf - teams[a].pf);
+  byPf.slice(0, rules.pts).forEach(i => how[i] = "points");
+  return { how, pfOrder: byPf };
+}
+
+// Letters on the chart, exact. A simulated season is a real way the season can go, so a team that
+// missed in any simulation hasn't clinched and a team that made it in any isn't eliminated; the
+// exact search only runs where the simulations can't already rule a letter out.
+function standings(d, rules, sim) {
+  const N = N_SIMS, opp = new Map();
+  for (const [a, b] of d.pairs[0] || []) { opp.set(a, b); opp.set(b, a); }
+  return d.teams.map((t, i) => {
+    const e = makeEngine(d, rules, i);
+    const g0 = e.myGames.find(g => g[0] === 0 && g[1] >= 0);
+    const W = g0 ? new Set([g0]) : new Set();
+    const nW = sim.nWin[i], nL = N - nW, mW = sim.madeWin[i], mL = sim.made[i] - mW;
+    const dW = sim.divTopWin[i], dL = sim.divTop[i] - dW;
+    const letter = (won, lost, made, n, top) => {
+      if (e.k && top === n && e.clinched(won, undefined, true) === true) return "y";
+      if (made === n && e.clinched(won) === true) return "x";
+      if (made === 0 && e.alive(lost) === false) return "e";
+      return null;
+    };
+    const now = letter(new Set(), new Set(), sim.made[i], N, sim.divTop[i]);
+    if (now === "e" || now === "y") return { now, win: now, loss: now };
+    if (now === "x") {  // in already; a division title could still hang on this week
+      const divWith = (won, n, top) => e.k && top === n && e.clinched(won, undefined, true) === true;
+      return { now, win: g0 && divWith(W, nW, dW) ? "y" : "x", loss: g0 && divWith(new Set(), nL, dL) ? "y" : "x" };
+    }
+    return {
+      now: null,
+      win: g0 ? letter(W, new Set(), mW, nW, dW) : null,
+      loss: g0 ? letter(new Set(), W, mL, nL, dL) : null,
+    };
+  });
+}
+
+// What has to happen this week for X to clinch or be eliminated: X's result plus a short list of
+// other results. Starts from every other game going the helpful way (the bigger threat to X
+// loses), then drops each result that isn't needed. One sufficient set, not the only one.
+function weekHelp(d, rules, X) {
+  const e = makeEngine(d, rules, X), teams = d.teams;
+  const g0 = e.myGames.find(g => g[0] === 0 && g[1] >= 0);
+  if (!g0) return null;
+  const games = e.others.filter(g => g[0] === 0);
+  const threat = t => (e.k && teams[t].division === teams[X].division ? 1000 : 0) + teams[t].wins * 10 + teams[t].pf / 1000;
+  const helpful = new Map(games.map(g => [g, threat(g[1]) >= threat(g[2]) ? g[2] : g[1]]));  // the threat loses
+  const harmful = new Map(games.map(g => [g, helpful.get(g) === g[1] ? g[2] : g[1]]));
+  const W = new Set([g0]), none = new Set();
+  // shrink a sufficient set of results to the ones it actually needs
+  const minimise = (fix, holds) => {
+    if (holds(new Map()) === true) return new Map();
+    if (holds(fix) !== true) return null;
+    const need = new Map(fix);
+    for (const g of [...fix.keys()]) { const v = need.get(g); need.delete(g); if (holds(need) !== true) need.set(g, v); }
+    return need;
+  };
+  const out = {};
+  if (e.k || e.B) {
+    out.clinchWin = minimise(helpful, f => e.clinched(W, f));
+    out.clinchLoss = minimise(helpful, f => e.clinched(none, f));
+    if (e.k) {
+      out.divisionWin = minimise(helpful, f => e.clinched(W, f, true));
+      out.divisionLoss = minimise(helpful, f => e.clinched(none, f, true));
+    }
+  }
+  if (!rules.pts) {
+    out.outLoss = minimise(harmful, f => { const a = e.alive(W, f); return a === null ? null : !a; });
+    out.outWin = minimise(harmful, f => { const a = e.alive(none, f); return a === null ? null : !a; });
+  }
+  out.opp = g0[1];
+  return out;
 }
 
 async function compute(d, rules, onProgress) {
   const sim = await simulate(d, rules, onProgress);
-  const st = standings(d, rules);
+  const st = standings(d, rules, sim);
   const opp = new Map();
   for (const [a, b] of d.pairs[0] || []) { opp.set(a, b); opp.set(b, a); }
   const rows = d.teams.map((t, i) => Object.assign({}, t, {
@@ -938,7 +1021,7 @@ async function compute(d, rules, onProgress) {
     status: st[i].now, status_win: st[i].win, status_loss: st[i].loss,
     proj: d.model === "projections" ? d.mu[0][i] : null,
     opp: opp.has(i) ? d.teams[opp.get(i)].name : null,
-    idx: i,
+    idx: i, pfShare: sim.pfPick[i] / N_SIMS,
   }));
   rows.sort((a, b) => b.now - a.now || b.win - a.win);
   return rows;
@@ -1052,23 +1135,50 @@ function render(view) {
 const MEANS = { x: "Clinched playoffs", y: "Clinched division", e: "Eliminated" };
 // clinch requirements for the tooltip, worked out on first hover and kept
 const clinchCache = new Map();
+function clinchInfo(t) {
+  const key = `${S.league.key}|${rulesToParam(S.rules)}|${t.idx}`;
+  if (!clinchCache.has(key)) {
+    const e = makeEngine(S.data, S.rules, t.idx);
+    clinchCache.set(key, { playoff: e.k || e.B ? e.winsNeeded(false) : undefined, division: e.k ? e.winsNeeded(true) : undefined, eliminate: e.lossesToOut() });
+  }
+  return clinchCache.get(key);
+}
+// The points-for spot can't be clinched or lost on paper, so show the race instead.
+function pfRace(t) {
+  if (!S.rules.pts) return "";
+  const d = S.data, pic = currentPicture(d, S.rules), me = t.idx, weeks = d.pairs.length;
+  const holders = pic.pfOrder.slice(0, S.rules.pts), name = i => d.teams[i].name, pts = i => d.teams[i].pf;
+  const likely = [...S.view.rows].sort((a, b) => b.pfShare - a.pfShare)[0];
+  const lines = [];
+  if (pic.how[me] === "points") {
+    const next = pic.pfOrder[S.rules.pts];
+    lines.push(`Points-for spot: holds it today${next != null ? `, ${(pts(me) - pts(next)).toFixed(1)} ahead of ${name(next)}` : ""}`);
+  } else if (!pic.how[me] && holders.length) {
+    const h = holders[holders.length - 1], gap = pts(h) - pts(me);
+    lines.push(`Points-for spot: ${name(h)} holds it today with ${pts(h).toFixed(1)}. ` +
+      `This team has ${pts(me).toFixed(1)}, ${gap.toFixed(1)} behind` + (weeks ? ` (about ${(gap / weeks).toFixed(1)} a week over ${weeks} weeks).` : "."));
+  }
+  if (likely && likely.pfShare > 0 && pic.how[me] !== "division" && pic.how[me] !== "record")
+    lines.push(`Most likely to take it: ${likely.name} (${pct(likely.pfShare)} of simulations)` + (likely.idx !== me && t.pfShare > 0 ? `; this team ${pct(t.pfShare)}` : ""));
+  return lines.join("\n");
+}
 function clinchText(t) {
   if (t.status === "e" || !S.data) return "";
-  const key = `${S.league.key}|${rulesToParam(S.rules)}|${t.idx}`;
-  if (!clinchCache.has(key)) clinchCache.set(key, clinchNeeds(S.data, S.rules, t.idx));
-  const c = clinchCache.get(key);
-  if (c.reason === "points") return "Playoff spots go by points, so nothing clinches before the season ends.";
+  const c = clinchInfo(t);
   const losses = n => `${n} more loss${n === 1 ? "" : "es"}${S.data.median ? " (median losses count)" : ""}`;
   const wins = n => `${n} more win${n === 1 ? "" : "s"}${S.data.median ? " (median wins count)" : ""}`;
   const line = (label, n) => n === 0 ? `${label}: clinched` : n === null ? `${label}: too many scenarios to check` :
     n === Infinity ? `${label}: needs help, even winning out` : `${label}: ${wins(n)}, no help needed`;
-  const parts = [line("Clinch playoffs", c.playoff)];
+  const parts = [];
+  if (c.playoff !== undefined) parts.push(line("Clinch playoffs", c.playoff));
   if (c.division !== undefined && S.rules.div > 0) parts.push(line("Clinch division", c.division));
-  if (c.playoff !== 0) parts.push(
-    c.eliminate === undefined ? "Eliminated: can't happen before the season ends (points-for spot)" :
-    c.eliminate === null ? "Eliminated: too many scenarios to check" :
-    c.eliminate === Infinity ? "Eliminated: still alive even losing out, with help" :
-    `Eliminated: after ${losses(c.eliminate)}, whatever else happens`);
+  if (c.playoff !== 0) {
+    if (c.eliminate === undefined) { const r = pfRace(t); if (r) parts.push(r); }
+    else parts.push(c.eliminate === null ? "Eliminated: too many scenarios to check" :
+      c.eliminate === Infinity ? "Eliminated: still alive even losing out, with help" :
+      `Eliminated: after ${losses(c.eliminate)}, whatever else happens`);
+  }
+  parts.push("Click or tap for this week's details");
   return parts.join("\n");
 }
 function tipHTML(t) {
@@ -1239,6 +1349,7 @@ function draw() {
 
   const plot = $("plot"), tip = $("tip");
   plot.innerHTML = "";
+  $("details").hidden = true;
   $("preview").hidden = true; $("status").textContent = ""; $("tools").hidden = false;
   const svg = render(v);
   plot.appendChild(svg);
@@ -1267,7 +1378,8 @@ function draw() {
     };
     g.addEventListener("mouseenter", open);
     g.addEventListener("focus", open);
-    g.addEventListener("click", open);
+    g.addEventListener("click", () => { open(); showDetails(t); });
+    g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); showDetails(t); } });
     g.addEventListener("mouseleave", () => tip.hidden = true);
     g.addEventListener("blur", () => tip.hidden = true);
   });
@@ -1409,6 +1521,71 @@ $("copy-link").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText(location.href); $("status").textContent = "Link copied. It opens this league with these playoff rules."; }
   catch (e) { $("status").textContent = location.href; }
 });
+
+// ---------- details panel: this week's paths, and the rest of the season ----------
+function showDetails(t) {
+  const d = S.data, v = S.view, box = $("details"), body = $("d-body");
+  $("d-name").textContent = t.name;
+  $("d-sub").textContent = `${t.owner !== t.name ? t.owner + " · " : ""}${t.wins}-${t.losses}${t.ties ? "-" + t.ties : ""} · ${t.pf.toFixed(1)} pts for`;
+  body.innerHTML = '<p class="note">Working it out…</p>';
+  box.hidden = false;
+  box.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  setTimeout(() => {
+    const name = i => d.teams[i].name;
+    const results = fix => [...fix].map(([g, w]) => `${name(w)} beats ${name(g[1] === w ? g[2] : g[1])}`);
+    const li = (text, list) => {
+      const el = document.createElement("li"); el.textContent = text;
+      if (list && list.length) { const ul = document.createElement("ul"); for (const r of list) { const x = document.createElement("li"); x.textContent = r; ul.appendChild(x); } el.appendChild(ul); }
+      return el;
+    };
+    const section = (title, items) => {
+      if (!items.length) return;
+      const h = document.createElement("h3"); h.textContent = title; body.appendChild(h);
+      const ul = document.createElement("ul"); items.forEach(i => ul.appendChild(i)); body.appendChild(ul);
+    };
+    body.innerHTML = "";
+    const c = clinchInfo(t), help = t.status === "e" ? null : weekHelp(d, S.rules, t.idx);
+    const thisWeek = [];
+    if (t.status === "e") thisWeek.push(li("Already eliminated."));
+    else if (!help) thisWeek.push(li("No game this week."));
+    else {
+      const opp = name(help.opp);
+      const say = (fix, done, base, word) => {
+        if (fix === undefined) return;
+        if (fix === null) return;
+        if (!fix.size) thisWeek.push(li(`${base} ${word}.`));
+        else thisWeek.push(li(`${base} ${word} if:`, results(fix)));
+      };
+      if (c.playoff === 0) thisWeek.push(li("Playoff spot already clinched."));
+      else if (c.playoff !== undefined) {
+        if (help.clinchWin === null && help.clinchLoss === null) thisWeek.push(li("Can't clinch a playoff spot this week."));
+        say(help.clinchWin, false, `Clinches a playoff spot with a win over ${opp}`, "");
+        say(help.clinchLoss, false, "Clinches a playoff spot even with a loss", "");
+      }
+      if (S.rules.div > 0 && c.division !== undefined) {
+        if (c.division === 0) thisWeek.push(li("Division already clinched."));
+        else if (help.divisionWin === null && help.divisionLoss === null) thisWeek.push(li("Can't clinch the division this week."));
+        else { say(help.divisionWin, false, `Clinches the division with a win over ${opp}`, ""); say(help.divisionLoss, false, "Clinches the division even with a loss", ""); }
+      }
+      if (S.rules.pts) { const r = pfRace(t); if (r) r.split("\n").forEach(line => thisWeek.push(li(line))); }
+      else if (c.playoff !== 0) {
+        if (help.outLoss === null && help.outWin === null) thisWeek.push(li("Can't be eliminated this week."));
+        say(help.outLoss, false, `Eliminated with a loss to ${opp}`, "");
+        say(help.outWin, false, "Eliminated even with a win", "");
+      }
+    }
+    // tidy "… ." / "… if:" spacing from the shared phrasing
+    thisWeek.forEach(el => { el.firstChild.textContent = el.firstChild.textContent.replace(/ \./, ".").replace(/ +if:/, " if:"); });
+    section(`Week ${v.week}`, thisWeek);
+    const tip = clinchText(t).split("\n").filter(l => !/^Click/.test(l) && !/^Points-for|^Most likely/.test(l));
+    section("Rest of the season", tip.map(l => li(l)));
+    const note = document.createElement("p"); note.className = "note";
+    note.textContent = "Exact, from every way the remaining games can go under this league's playoff rules. A listed set of results is one way it happens; other combinations can work too. " +
+      "Clinching counts a tied record against the team; elimination lets a tie go its way." + (d.median ? " This week's median game is left open: counted as a loss for clinching, a win for elimination." : "");
+    body.appendChild(note);
+  }, 20);
+}
+$("d-close").addEventListener("click", () => { $("details").hidden = true; });
 
 const hideTip = () => { $("tip").hidden = true; };
 addEventListener("scroll", hideTip, { passive: true });

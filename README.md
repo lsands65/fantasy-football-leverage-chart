@@ -45,7 +45,10 @@ The last username, league and rules are also remembered in your browser (`localS
   (ties broken by points for), then most remaining points for.
 - **x** / **y** / **e** replace a percentage once a team has mathematically clinched a playoff spot,
   clinched its division, or been eliminated, based on records alone.
-  These letters never show early, but they can show up a week later than the earliest possible moment.
+  The letters are exact: they appear the moment a result is certain, never early or late.
+- Hover a team for what it needs over the rest of the season (wins to clinch, losses to be eliminated).
+  Click or tap it for this week's details: the results that would clinch or eliminate it this week,
+  and in leagues with a points-for spot, how far it trails the team holding that spot.
 
 If projections can't be loaded, it falls back to each team's scoring average so far.
 
