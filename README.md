@@ -30,12 +30,12 @@ The last username, league and rules are also remembered in your browser (`localS
 
 ## The playoff race
 
-**Watch the playoff race** turns the season into a horse race around an oval: one lap is the regular season
-and everyone starts at the gate. Each week every horse runs at least a trot, plus a burst from its playoff
-odds that week, so it slows down when its odds drop but never runs backwards, and even a long shot keeps
-running. A horse crosses the finish line only once its team has mathematically clinched. A running order
-beside the track shows each team's pace. Past weeks are replayed from the standings at the time (10,000
-simulations each), using today's rosters with that week's projections, so early weeks are a close
+**Watch the playoff race** turns the season into a horse race down a straight track, one lane per team,
+one regular season long. Everyone starts at the gate and the race runs without stopping, a week per leg.
+Each week every horse runs at least a trot, plus a burst from its playoff odds that week, so it slows down
+when its odds drop but never runs backwards, and even a long shot keeps running. A horse crosses the finish
+line only once its team has mathematically clinched. Past weeks are replayed from the standings at the time
+(10,000 simulations each), using today's rosters with that week's projections, so early weeks are a close
 reconstruction.
 
 ## How the odds work

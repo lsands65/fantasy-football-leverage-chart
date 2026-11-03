@@ -125,18 +125,8 @@ details.rules summary span { font-weight: 400; color: var(--ink-soft); }
 .race-head h2 { font-family: var(--display); font-weight: 800; font-size: clamp(1.4rem, 4vw, 2rem); margin: 0; }
 .race-week { font: 700 1.2rem/1 var(--label); color: var(--win); font-variant-numeric: tabular-nums; }
 .race-call { margin: 0; min-height: 2.8em; font-size: 1.05rem; line-height: 1.4; max-width: 75ch; }
-.race-body { display: grid; grid-template-columns: minmax(0, 1fr) 15rem; gap: 14px; align-items: start; }
-@media (max-width: 760px) { .race-body { grid-template-columns: minmax(0, 1fr); } }
-.race-track { overflow-x: auto; min-width: 0; }
-.race-track svg { display: block; width: 100%; min-width: 560px; height: auto; font-family: var(--label); }
-.race-board { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: pos; font-variant-numeric: tabular-nums; }
-.race-board li { display: grid; grid-template-columns: 1.6em 1.2em minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 3px 6px; border-radius: 4px; counter-increment: pos; font-size: .9rem; }
-.race-board li::before { content: counter(pos); color: var(--ink-soft); text-align: right; }
-.race-board li.won { background: color-mix(in srgb, var(--win) 14%, transparent); font-weight: 700; }
-.race-board li.out { opacity: .5; }
-.race-board .silk { width: 1.2em; height: 1.2em; border-radius: 50%; background-size: cover; background-position: center; border: 1px solid var(--edge); }
-.race-board .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.race-board .pc { color: var(--ink-soft); }
+.race-track { overflow-x: auto; border-radius: 10px; }
+.race-track svg { display: block; width: 100%; min-width: 680px; height: auto; font-family: var(--label); }
 .race .note { color: var(--ink-soft); font-size: .88rem; margin: 0; max-width: 75ch; }
 .details { border: 1.5px solid var(--edge); border-radius: 8px; padding: 12px 16px; display: grid; gap: 10px; background: var(--chip); }
 .details-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
@@ -239,10 +229,7 @@ footer p { margin: 0; }
       </div>
     </div>
     <p class="race-call" id="race-call" aria-live="polite"></p>
-    <div class="race-body">
-      <div class="race-track" id="race-track"></div>
-      <ol class="race-board" id="race-board" aria-label="Running order"></ol>
-    </div>
+    <div class="race-track" id="race-track"></div>
     <p class="note" id="race-note"></p>
   </section>
   <div class="plot" id="plot"><p class="empty">Enter a Sleeper username or an ESPN league to see playoff odds.</p></div>
@@ -759,17 +746,6 @@ async function simulate(d, rules, onProgress, sims = N_SIMS) {
   return { made, madeWin, nWin, divTop, divTopWin, pfPick, n: sims };
 }
 
-// Mathematical clinch / elimination by record alone, shown with standings letters:
-// x = clinched playoffs, y = clinched division, e = eliminated. Ties in record go to
-// points for, which can't be bounded, so a tie always counts against the team.
-// These are sufficient conditions: a letter is never shown wrongly.
-//   Clinched: fewer than k division-mates can catch the team (k = division spots), or
-//   fewer than k + B teams overall can (B = record spots). If the team misses its
-//   division's top k, those k division-mates are all ahead of it, so at most
-//   (others ahead - k) unpicked teams stay ahead of it when the B record spots are handed out.
-//   Eliminated: with no points-for spots, k division-mates and kD + B teams overall
-//   (D divisions) finish ahead no matter what. Points for has no ceiling, so any
-//   points-for spot keeps everyone alive until the season ends.
 // ---------- exact clinch / elimination ----------
 // Everything here is exact, not simulated. For one team X:
 //   clinched: every way the rest of the season can go still puts X in. X loses every game
@@ -1623,7 +1599,8 @@ async function raceSeries(d, rules, onProgress) {
 }
 
 const race = { frames: null, rows: null, t: 0, playing: true, raf: 0, last: 0, calledFor: -1 };
-const STEP_MS = 2200, HOLD_MS = 700;
+const STEP_MS = 2400, GATE_MS = 1200;  // one week per leg, run without stopping; a beat in the gate first
+const raceLength = () => GATE_MS + (race.frames.length - 1) * STEP_MS;
 function raceCommentary(prev, cur, week, final) {
   const rows = race.rows, name = i => rows[i].name, st = race.status[week], was = race.status[week - 1] || [];
   if (week === 0) return `They're in the gate: ${rows.length} teams chasing ${S.view.spots} playoff spots.`;
@@ -1649,87 +1626,40 @@ function raceCommentary(prev, cur, week, final) {
   return bits.join(" ");
 }
 
-// The track is an oval run counterclockwise, one lap for the regular season. A horse's place is a
-// fraction of the lap from the start/finish line on the home stretch; its "lane" is just how far out
-// from the rail it runs, which changes as it races (see racingLines). Progress is counted as a fraction
-// of the lap whatever the line, so running wide costs nothing here.
-const RACE = { MIN_PACE: .35, CAP: .985, PAST: 1.025 };
-function raceGeometry(teams) {
-  // track width in horse-widths: room to pass, not a lane per horse
-  const n = Math.min(teams, teams > 16 ? 12 : 7), laneW = teams > 16 ? 13 : 18, R0 = teams > 16 ? 120 : 110, Rout = R0 + n * laneW;
-  const W = 1000, cy = Rout + 18, Ls = W - 2 * Rout - 40, cx = W / 2;
-  return { n, teams, laneW, R0, Rout, W, H: 2 * Rout + 36, cx, cy, Ls, s0: Ls * .7 };
-}
-// point and heading at lap fraction `frac` in lane `j`
-function lanePoint(G, j, frac) {
-  const R = G.R0 + (j + .5) * G.laneW, L = 2 * G.Ls + 2 * Math.PI * R;
-  let d = ((G.s0 + frac * L) % L + L) % L;
-  const left = G.cx - G.Ls / 2, right = G.cx + G.Ls / 2;
-  if (d < G.Ls) return { x: left + d, y: G.cy + R, a: 0 };                     // home stretch, heading right
-  d -= G.Ls;
-  if (d < Math.PI * R) { const t = d / R; return { x: right + R * Math.sin(t), y: G.cy + R * Math.cos(t), a: -t * 180 / Math.PI }; }  // far turn
-  d -= Math.PI * R;
-  if (d < G.Ls) return { x: right - d, y: G.cy - R, a: 180 };                   // back stretch, heading left
-  d -= G.Ls;
-  const t = d / R; return { x: left - R * Math.sin(t), y: G.cy - R * Math.cos(t), a: 180 - t * 180 / Math.PI };  // club-house turn
-}
-function stadiumPath(G, R) {
-  const l = G.cx - G.Ls / 2, r = G.cx + G.Ls / 2, t = G.cy - R, b = G.cy + R;
-  return `M${l},${b} L${r},${b} A${R},${R} 0 0 0 ${r},${t} L${l},${t} A${R},${R} 0 0 0 ${l},${b} Z`;
-}
+// A straight track, one lane per team, run left to right. A horse's place is a fraction of the
+// distance from the gate (0) to the finish line (1); one full-pace stride per week covers the
+// regular season exactly. Only a clinched horse goes past the line.
+const RACE = { GATE: 170, FINISH: 880, MIN_PACE: .35, CAP: .985, PAST: 1.09 };
+const raceX = frac => RACE.GATE + frac * (RACE.FINISH - 25 - RACE.GATE);
 function raceDraw(now) {
-  const rows = race.rows, frames = race.frames, nF = frames.length, G = race.G;
-  const seg = STEP_MS + HOLD_MS, total = (nF - 1) * seg;
-  const t = Math.min(race.t, total), k = Math.max(0, Math.min(nF - 2, Math.floor(t / seg))), local = t - k * seg;
-  const f = nF === 1 ? 1 : Math.min(1, local / STEP_MS), ease = f < .5 ? 2 * f * f : 1 - (-2 * f + 2) ** 2 / 2;
+  const rows = race.rows, frames = race.frames, nF = frames.length;
+  // steady speed through each leg: progress is linear in time, so pace only changes when the odds do
+  const total = raceLength(), t = Math.min(race.t, total), run = Math.max(0, t - GATE_MS);
+  const k = Math.max(0, Math.min(nF - 2, Math.floor(run / STEP_MS)));
+  const f = nF === 1 ? 1 : Math.min(1, (run - k * STEP_MS) / STEP_MS);
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const svg = $("race-track").querySelector("svg"), kb = nF === 1 ? 0 : k + 1, shown = f >= 1 ? kb : k;
-  const size = G.laneW * (G.teams > 16 ? 1.6 : 1.7);
+  const svg = $("race-track").querySelector("svg"), kb = nF === 1 ? 0 : k + 1, LH = +svg.dataset.lane;
   rows.forEach((r, i) => {
-    const a = race.pos[k][i], b = race.pos[kb][i], frac = nF === 1 ? a : a + (b - a) * ease;
-    const v = nF === 1 ? frames[k][i] : frames[k][i] + (frames[kb][i] - frames[k][i]) * ease;
-    const moving = f < 1 && nF > 1, speed = moving ? (b - a) * (nF - 1) : 0;
-    // drift between this week's racing line and next week's, with a slight weave while running
-    const la = race.line[k][i], lb = race.line[kb][i];
-    const line = (nF === 1 ? la : la + (lb - la) * ease) + (moving && !reduce ? Math.sin(now / 900 + i * 1.7) * .18 : 0);
-    const p = lanePoint(G, Math.max(0, Math.min(G.n - 1, line)), frac);
-    const bob = reduce || !moving ? 0 : Math.sin(now / (75 - Math.min(45, speed * 60)) + i) * (1 + speed * 2.5);
-    // the emoji faces left; flip it when heading right, and keep it upright through the turns
-    const rightish = Math.cos(p.a * Math.PI / 180) >= 0;
-    const turn = rightish ? `rotate(${p.a}) scale(-1 1)` : `rotate(${p.a - 180})`;
+    const a = race.pos[k][i], b = race.pos[kb][i], frac = nF === 1 ? a : a + (b - a) * f;
+    const v = nF === 1 ? frames[k][i] : frames[k][i] + (frames[kb][i] - frames[k][i]) * f;
+    const moving = t > GATE_MS && t < total && nF > 1, speed = moving ? (b - a) * (nF - 1) : 0;
+    // faster gallop (and a bigger bob) for horses running faster this week
+    const bob = reduce || !moving ? 0 : Math.sin(now / (75 - Math.min(45, speed * 60)) + i) * (1.2 + speed * 3);
     const g = svg.querySelector(`[data-h="${i}"]`);
-    g.setAttribute("transform", `translate(${p.x} ${p.y + bob})`);
-    g.querySelector(".rider").setAttribute("transform", turn);
-    const st = race.status[shown][i];
+    g.setAttribute("transform", `translate(${raceX(frac)} ${(i + .5) * LH + bob})`);
+    const st = race.status[f >= 1 ? kb : k][i];
     g.setAttribute("opacity", st === "e" ? .45 : 1);
-    g.querySelector(".dust").setAttribute("opacity", !reduce && moving && speed > .6 ? .85 : 0);
-    g.querySelector(".dust").setAttribute("transform", `${turn} translate(${size * .95} 0)`);
-    g.querySelector("title").textContent = `${r.name}: ${st === "x" ? "clinched" : st === "y" ? "clinched division" : st === "e" ? "out" : pct(v) + " pace"}`;
+    g.querySelector(".pct").textContent = st === "e" ? "out" : st === "y" ? "y" : st === "x" ? "x" : t <= GATE_MS ? "" : pct(v);
+    g.querySelector(".dust").setAttribute("opacity", !reduce && moving && speed > .6 ? .9 : 0);
   });
-  const week = Math.min(nF - 1, k + (f >= 1 && nF > 1 ? 1 : 0));
-  $("race-week").textContent = week === 0 ? "At the gate" : week === nF - 1 ? `After week ${week} (today)` : `After week ${week}`;
+  // the leg being run is week k + 1; its call goes up as the leg starts
+  const week = t <= GATE_MS || nF === 1 ? 0 : k + 1, finished = t >= total;
+  $("race-week").textContent = week === 0 ? "At the gate" : finished ? `After week ${week} (today)` : `Week ${week}`;
   if (race.calledFor !== week) {
     race.calledFor = week;
     $("race-call").textContent = raceCommentary(frames[Math.max(0, week - 1)], frames[week], week, week === nF - 1);
-    raceBoard(week);
   }
   return t >= total;
-}
-// running order beside the track: how far around, pace, and status
-function raceBoard(week) {
-  const rows = race.rows, ol = $("race-board");
-  const order = rows.map((r, i) => i).sort((a, b) => race.pos[week][b] - race.pos[week][a]);
-  ol.innerHTML = "";
-  for (const i of order) {
-    const li = document.createElement("li"), st = race.status[week][i];
-    li.className = st === "e" ? "out" : st ? "won" : "";
-    const dot = document.createElement("span"); dot.className = "silk"; dot.style.background = colorFor(rows[i], i);
-    if (rows[i].avatar) dot.style.backgroundImage = `url(${rows[i].avatar})`;
-    const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = rows[i].name;
-    const pc = document.createElement("span"); pc.className = "pc";
-    pc.textContent = st === "x" ? "x" : st === "y" ? "y" : st === "e" ? "out" : week === 0 ? "" : pct(race.frames[week][i]);
-    li.append(dot, nm, pc); ol.appendChild(li);
-  }
 }
 function raceLoop(now) {
   if (race.playing && race.last) race.t += now - race.last;
@@ -1738,56 +1668,43 @@ function raceLoop(now) {
   if (!$("race").hidden) race.raf = requestAnimationFrame(raceLoop);
 }
 function raceTrack(rows) {
-  const G = race.G = raceGeometry(rows.length);
-  const svg = el("svg", { viewBox: `0 0 ${G.W} ${G.H}`, role: "img", "aria-label": "Playoff race around an oval track" });
-  el("path", { d: stadiumPath(G, G.Rout + 6), fill: "var(--rail)", "fill-opacity": .9 }, svg);
-  el("path", { d: stadiumPath(G, G.Rout), fill: "var(--turf)" }, svg);
-  // no painted lanes: a faint harrow pattern in the dirt instead
-  for (let j = 1; j < G.n; j += 2) el("path", { d: stadiumPath(G, G.R0 + j * G.laneW), fill: "none", stroke: "var(--rail)", "stroke-opacity": .07 }, svg);
-  el("path", { d: stadiumPath(G, G.R0), fill: "var(--turf-dark)", stroke: "var(--rail)", "stroke-width": 3 }, svg);
-  // infield sign
-  text(svg, G.cx, G.cy - 8, "THE PLAYOFF STAKES", { "text-anchor": "middle", fill: "var(--rail)", "font-size": 28, "font-weight": 800, style: "font-family: Rubik, 'Arial Black', sans-serif", "letter-spacing": ".04em" });
-  text(svg, G.cx, G.cy + 22, `${S.view.spots} spots · one lap = the regular season`, { "text-anchor": "middle", fill: "var(--rail)", "fill-opacity": .8, "font-size": 15 });
-  // start/finish line across the home stretch
-  const x0 = G.cx - G.Ls / 2 + G.s0, top = G.cy + G.R0, sq = 6;
-  for (let y = top, r = 0; y < G.cy + G.Rout; y += sq, r++) for (let c = 0; c < 2; c++)
-    el("rect", { x: x0 - sq + c * sq, y, width: sq, height: Math.min(sq, G.cy + G.Rout - y), fill: (r + c) % 2 ? "#fff" : "#111" }, svg);
-  text(svg, x0, G.cy + G.Rout + 14, "START / FINISH", { "text-anchor": "middle", fill: "var(--ink)", "font-size": 12, "font-weight": 700 });
-  const size = G.laneW * (G.teams > 16 ? 1.6 : 1.7);
+  const n = rows.length, LH = n > 16 ? 26 : 44, W = 1000, X0 = RACE.GATE, X1 = RACE.FINISH - 25, H = n * LH;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H + 30}`, role: "img", "aria-label": "Playoff race, one lane per team" });
+  svg.dataset.lane = LH;
+  el("rect", { x: 0, y: 0, width: W, height: H, fill: "var(--turf)" }, svg);
+  for (let i = 0; i < n; i++) {
+    if (i % 2) el("rect", { x: 0, y: i * LH, width: W, height: LH, fill: "var(--turf-dark)" }, svg);
+    if (i) el("line", { x1: 0, x2: W, y1: i * LH, y2: i * LH, stroke: "var(--rail)", "stroke-opacity": .35, "stroke-dasharray": "6 8" }, svg);
+  }
+  // starting gate, a post for each week of a full-pace stride, and the finish line: crossing it means clinched
+  el("rect", { x: X0 - 34, y: 0, width: 8, height: H, fill: "var(--rail)", "fill-opacity": .8 }, svg);
+  text(svg, X0 - 30, H + 16, "GATE", { "text-anchor": "middle", fill: "var(--ink-soft)", "font-size": 13, "font-weight": 700 });
+  const weeks = Math.max(1, S.data.poStart - 1);
+  for (let w = 1; w < weeks; w++) {
+    const x = X0 + w * (X1 - X0) / weeks;
+    el("line", { x1: x, x2: x, y1: 0, y2: H, stroke: "var(--rail)", "stroke-opacity": .18 }, svg);
+  }
+  const FX = RACE.FINISH;
+  for (let y = 0, r = 0; y < H; y += 6, r++) for (let c = 0; c < 2; c++) el("rect", { x: FX + c * 6, y, width: 6, height: 6, fill: (r + c) % 2 ? "#fff" : "#111" }, svg);
+  text(svg, FX + 6, H + 16, "CLINCHED", { "text-anchor": "middle", fill: "var(--ink)", "font-size": 13, "font-weight": 700 });
   rows.forEach((r, i) => {
-    const g = el("g", { "data-h": i }, svg);
-    el("title", {}, g);
-    const d = el("text", { class: "dust", x: 0, y: 0, "dominant-baseline": "central", "text-anchor": "middle", "font-size": size * .55, opacity: 0 }, g); d.textContent = "💨";
-    const rider = el("g", { class: "rider" }, g);
-    el("text", { x: 0, y: 0, "dominant-baseline": "central", "text-anchor": "middle", "font-size": size }, rider).textContent = "🏇";
-    // the team's picture rides as its silks
-    const cid = `silk${i}`, cp = el("clipPath", { id: cid }, svg), sr = size * .2;
-    el("circle", { cx: -size * .08, cy: -size * .3, r: sr }, cp);
-    el("circle", { cx: -size * .08, cy: -size * .3, r: sr * 1.12, fill: colorFor(r, i), stroke: "#fff", "stroke-width": 1.2 }, rider);
-    if (r.avatar) el("image", { href: r.avatar, x: -size * .08 - sr, y: -size * .3 - sr, width: sr * 2, height: sr * 2, "clip-path": `url(#${cid})`, preserveAspectRatio: "xMidYMid slice" }, rider);
+    text(svg, 8, (i + .5) * LH, r.name.length > 20 ? r.name.slice(0, 19) + "…" : r.name, { fill: "var(--rail)", "font-size": LH > 30 ? 15 : 12, "font-weight": 700 });
+    const g = el("g", { "data-h": i }, svg), s = LH * .9;
+    el("text", { class: "dust", x: -s * 1.1, y: 2, "dominant-baseline": "central", "text-anchor": "middle", "font-size": s * .55, opacity: 0 }, g).textContent = "💨";
+    // the horse faces right; the team's picture rides as its silks
+    el("text", { x: 0, y: 0, "dominant-baseline": "central", "text-anchor": "middle", "font-size": s, transform: "scale(-1 1)" }, g).textContent = "🏇";
+    const cid = `silk${i}`, cp = el("clipPath", { id: cid }, svg);
+    el("circle", { cx: s * .1, cy: -s * .3, r: s * .2 }, cp);
+    el("circle", { cx: s * .1, cy: -s * .3, r: s * .22, fill: colorFor(r, i), stroke: "#fff", "stroke-width": 1.5 }, g);
+    if (r.avatar) el("image", { href: r.avatar, x: s * .1 - s * .2, y: -s * .3 - s * .2, width: s * .4, height: s * .4, "clip-path": `url(#${cid})`, preserveAspectRatio: "xMidYMid slice" }, g);
+    el("text", { class: "pct", x: s * .7, y: 1, "dominant-baseline": "central", fill: "#fff", "font-size": LH > 30 ? 15 : 12, "font-weight": 700, stroke: "rgba(0,0,0,.45)", "stroke-width": 3, "paint-order": "stroke" }, g);
   });
   return svg;
-}
-// Where each horse runs across the track after each week. At the gate they stand in post positions;
-// after that, placed from the leader back, each takes the spot nearest the rail that isn't blocked by
-// a horse just ahead or alongside, so a horse in traffic swings wide to pass and tucks back in when clear.
-function racingLines(pos, n, width) {
-  const GAP = .03;  // about a length and a half, as a fraction of the lap
-  return pos.map((P, fi) => {
-    if (fi === 0) return P.map((_, i) => n > 1 ? i * (width - 1) / (n - 1) : 0);  // the gate, rail to outside
-    const L = new Array(n), placed = [];
-    for (const i of P.map((_, i) => i).sort((a, b) => P[b] - P[a])) {
-      let lane = 0;
-      while (lane < width - 1 && placed.some(j => Math.abs(L[j] - lane) < .9 && Math.abs(P[j] - P[i]) < GAP)) lane += 1;
-      L[i] = lane; placed.push(i);
-    }
-    return L;
-  });
 }
 async function openRace() {
   const sec = $("race"), key = `${S.league.key}|${rulesToParam(S.rules)}`;
   sec.hidden = false; $("plot").hidden = true; $("details").hidden = true; $("tip").hidden = true;
-  $("race-track").innerHTML = ""; $("race-board").innerHTML = ""; $("race-week").textContent = ""; $("race-note").textContent = "";
+  $("race-track").innerHTML = ""; $("race-week").textContent = ""; $("race-note").textContent = "";
   cancelAnimationFrame(race.raf);
   try {
     if (!raceCache.has(key)) raceCache.set(key, await raceSeries(S.data, S.rules, msg => { $("race-call").textContent = msg; }));
@@ -1815,8 +1732,7 @@ async function openRace() {
     return Math.min(RACE.CAP, prev + pace * stride);
   })));
   $("race-track").appendChild(raceTrack(race.rows));
-  race.line = racingLines(race.pos, race.rows.length, race.G.n);
-  $("race-note").textContent = `One lap is the regular season, and everyone starts at the gate. Each week every horse runs at least a trot, plus a burst from its playoff odds that week (its pace in the running order), ` +
+  $("race-note").textContent = `Everyone starts at the gate, and the track is one regular season long. Each week every horse runs at least a trot, plus a burst from its playoff odds that week (the number beside it), ` +
     `so a horse slows down when its odds drop but never runs backwards, and even a long shot keeps running. Only a horse that has clinched crosses the finish line. ` +
     `Past weeks are replayed from the standings at the time with ${RACE_SIMS.toLocaleString("en-US")} simulations each, using today's rosters with that week's projections, so early weeks are a close reconstruction.`;
   race.t = 0; race.last = 0; race.calledFor = -1; race.playing = true; $("race-play").textContent = "Pause";
@@ -1827,7 +1743,7 @@ $("race-open").addEventListener("click", openRace);
 $("race-close").addEventListener("click", closeRace);
 $("race-play").addEventListener("click", () => {
   if (!race.frames) return;
-  if (!race.playing && race.t >= (race.frames.length - 1) * (STEP_MS + HOLD_MS)) { race.t = 0; race.calledFor = -1; }
+  if (!race.playing && race.t >= raceLength()) { race.t = 0; race.calledFor = -1; }
   race.playing = !race.playing; race.last = 0; $("race-play").textContent = race.playing ? "Pause" : "Play";
 });
 $("race-replay").addEventListener("click", () => { race.t = 0; race.last = 0; race.calledFor = -1; race.playing = true; $("race-play").textContent = "Pause"; });
